@@ -1,0 +1,5 @@
+# Operator-local material never enters this public repo
+local/
+# macOS noise
+.DS_Store
+._*
