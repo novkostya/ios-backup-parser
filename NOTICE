@@ -1,0 +1,21 @@
+ios-backup-parser
+Copyright (c) 2026 Konstantin Novikov
+Licensed under the MIT License (see LICENSE).
+
+Third-party attribution
+-----------------------
+
+iLEAPP — iOS Logs, Events, And Plist Parser
+  https://github.com/abrignoni/iLEAPP
+  MIT License.
+
+  Used with attribution per its license. The M0 schema spike cross-referenced
+  iLEAPP's parsing logic — notably scripts/artifacts/sms.py — to validate the
+  messages domain: Cocoa/nanosecond timestamp conversion, attributedBody /
+  typedstream handling, join topology, and attachment-path handling. Where later
+  milestones translate any iLEAPP parsing logic into Go, that code is additionally
+  attributed inline at the call site.
+
+imessage-exporter (GPL) is used ONLY as a black-box differential oracle — executed
+and compared against, never read or ported. No GPL-licensed code is incorporated
+into this repository.
