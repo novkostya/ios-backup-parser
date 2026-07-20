@@ -50,10 +50,12 @@ carries a status:
   real backup for this fingerprint. The differential is a required manual gate, not a
   nicety.
 
-M0 left all five at **`observed`**. Since then: **`contacts.1` → validated** (M1),
-**`calls.1` → validated** (M2), **`messages.1` → validated** (M3) and
-**`calendar.1` → validated** (M4), each by an operator-local differential vs iLEAPP.
-The remaining one (notes) is still `observed` (no parser yet).
+M0 left all five at **`observed`**. Since then all five are **`validated`** by an
+operator-local differential: **`contacts.1`** (M1), **`calls.1`** (M2),
+**`messages.1`** (M3), **`calendar.1`** (M4) and **`notes.1`** (M5). Four used iLEAPP
+directly as the oracle; notes used iLEAPP's own (MIT) note-body decoder plus the
+store's SQL and Apple's stored snippet, because iLEAPP's notes export returns zero
+rows on the iOS-18 schema (see [notes.md](notes.md) → Validation).
 
 ## Storage idioms
 
@@ -121,9 +123,13 @@ the matching artifact as they land: `addressBook.py` (M1, contacts),
 `associated_message_type` / `item_type` conventions) and `calendarAll.py`
 (M4, calendar — the events/birthday `calendar_scale` split, the join topology,
 `Participant.status` / `entity_type` and `sharing_status` enums, the `_float`
-timezone sentinel), each attributed in `NOTICE` and inline. iLEAPP is also the differential oracle for those domains — for messages
-its own typedstream decoder (python-typedstream) is the independent oracle that
-validated the from-scratch Go decoder. **imessage-exporter** (GPL) is a black-box
+timezone sentinel) and `notes.py` (M5, notes — itself modified from mac_apt's Notes
+plugin, MIT; the note column choices, the gzip+protobuf body encoding, and its own
+body decoder), each attributed in `NOTICE` and inline. iLEAPP is also the differential
+oracle for those domains — for messages its own typedstream decoder (python-typedstream)
+is the independent oracle that validated the from-scratch Go decoder, and for notes its
+own note-body decoder plays the same role (its full notes export is unusable on the
+iOS-18 schema, so the store's SQL and Apple's stored snippet complete the oracle). **imessage-exporter** (GPL) is a black-box
 oracle only (source never read), documented as the stronger manual cross-check in the
 `diff-study-messages` Makefile target.
 
@@ -135,4 +141,4 @@ oracle only (source never read), documented as the stronger manual cross-check i
 | [calls.md](calls.md) | `HomeDomain/Library/CallHistoryDB/CallHistory.storedata` | CoreData | `calls.1` validated |
 | [messages.md](messages.md) | `HomeDomain/Library/SMS/sms.db` | plain + typedstream | `messages.1` validated |
 | [calendar.md](calendar.md) | `HomeDomain/Library/Calendar/Calendar.sqlitedb` | plain | `calendar.1` validated |
-| [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` observed |
+| [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` validated |

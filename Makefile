@@ -222,6 +222,43 @@ diff-study-calendar: dump-study-calendar tc-ileapp ## Operator-local differentia
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_calendar.py /src/.difftmp \
 	    --db /study/HomeDomain/Library/Calendar/Calendar.sqlitedb
 
+NOTES_DB := AppDomainGroup-group.com.apple.notes/NoteStore.sqlite
+
+.PHONY: dump-study-notes
+dump-study-notes: tc-go ## Operator-local: stream notes from the study tree to .difftmp/parser-notes.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain notes > .difftmp/parser-notes.jsonl && \
+	    wc -l .difftmp/parser-notes.jsonl'
+
+# NOTES DIFFERENTIAL — a departure from the other domains' harness, for a reason.
+# iLEAPP's notes.py hard-codes the note→account join on ZACCOUNT4; on the iOS 17/18
+# schema a note's account lives in ZACCOUNT7, so its INNER JOIN matches nothing and
+# iLEAPP returns ZERO notes (see its own sample_data: "iOS 18.x | 0 rows"). Running
+# the iLEAPP artifact here would therefore produce an empty, useless export. So the
+# oracle is split (still an INDEPENDENT implementation, still MIT):
+#   - BODY DECODER: diff_notes.py ports iLEAPP notes.py's own decoder
+#     (get_uncompressed_data + process_note_body_blob — a fixed-offset byte-walk,
+#     MIT, attributed) and runs it against a scratch copy, cross-checking our
+#     from-scratch Go recursive-descent protobuf reader blob-for-blob — the same
+#     independent-decoder validation diff_messages.py gets from python-typedstream.
+#   - METADATA + SET: iLEAPP's query semantics (its column choices) re-run against a
+#     scratch copy keyed by ICNote Z_PK, both-directions set check.
+#   - SNIPPET: every decoded body is cross-checked against Apple's own stored
+#     ZSNIPPET preview — an oracle-independent confirmation of the text.
+#   - MEDIA: each media FileRef is checked to os.path.exists under the study tree.
+# The parser only ever opens a scratch COPY (BackupFS.Materialize); diff_notes.py
+# opens the study DB read-only+immutable. STRONGER MANUAL ESCALATION: Apple Notes is
+# also parsed by apple_cloud_notes_parser (threeplanetssoftware) — run it operator-
+# side as a black box and diff its export, mirroring M1's `-t itunes` note.
+.PHONY: diff-study-notes
+diff-study-notes: dump-study-notes tc-ileapp ## Operator-local differential: parser vs iLEAPP's decoder + store SQL + snippet
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_notes.py /src/.difftmp \
+	    --db "/study/$(NOTES_DB)" --study /study
+
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images
 	-$(RUNTIME) run --rm -v $(ROOT):/src $(ALPINE_IMAGE) rm -rf /src/.difftmp

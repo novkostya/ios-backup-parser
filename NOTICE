@@ -52,6 +52,21 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   oracle for calendar (its Calendar Events export in phase 1; its query semantics
   re-run in phase 2).
 
+  M5 (notes) additionally cross-referenced scripts/artifacts/notes.py — which is
+  itself modified from Yogesh Khatri's mac_apt Notes plugin
+  (https://github.com/ydkhatri/mac_apt, MIT) — for the notes query column choices
+  (a note's ZTITLE1 title, ZSNIPPET, ZCREATIONDATE3 creation date, ZACCOUNT7
+  account, ZFOLDER → folder ZTITLE2), the gzip (zlib window 15+32) + protobuf note
+  body encoding, and the Media/<identifier>/<generation>/<filename> attachment
+  path convention. iLEAPP's OWN note-body decoder (get_uncompressed_data +
+  process_note_body_blob) is ported verbatim into deploy/diff_notes.py as the
+  independent differential oracle (attributed inline there). Note iLEAPP's notes.py
+  returns zero rows on the iOS 17/18 schema (it hard-codes the account join on
+  ZACCOUNT4, which moved to ZACCOUNT7), so its full export is not usable as a
+  phase-1 oracle; the ported decoder, the store's own SQL, and Apple's stored
+  ZSNIPPET are the oracles instead. Attributed inline in notes/schema.go and
+  deploy/diff_notes.py.
+
 typedstream format (M3 internal/typedstream)
 --------------------------------------------
 
@@ -78,3 +93,24 @@ imessage-exporter (GPL) and crabstep (its Rust typedstream deserializer) are use
 ONLY as black-box differential oracles — executed and compared against, never read
 or ported (see the diff-study-messages Makefile target for the documented manual
 cross-check). No GPL-licensed code is incorporated into this repository.
+
+Apple Notes body format (M5 internal/applenotes)
+------------------------------------------------
+
+  The Apple Notes note-body decoder (gzip of a "Note Store proto") was implemented
+  FROM PUBLIC FORMAT DOCUMENTATION ONLY:
+
+  - Published "Apple Notes" reverse-engineering write-ups (CCL Solutions Group /
+    Alex Caithness; Ciofeca Forensics) describing the Note Store protobuf — prose
+    facts about a file format, not copyrightable.
+  - The protobuf wire-format specification (Google's public encoding docs) — the
+    universal varint / length-delimited framing the reader walks.
+  - The field numbers on the note-text path (document = 2, note = 3, note_text = 2)
+    as used by the MIT iLEAPP notes.py, independently confirmed against instrumented
+    dumps of the study backup.
+
+  The decoder is a from-scratch recursive-descent protobuf reader; it was validated
+  differentially against iLEAPP's own independent (fixed-offset byte-walk) decoder,
+  ported into deploy/diff_notes.py (see above). apple_cloud_notes_parser
+  (threeplanetssoftware) is used ONLY as an optional black-box manual cross-check
+  (see the diff-study-notes Makefile target); its source is not read or ported.

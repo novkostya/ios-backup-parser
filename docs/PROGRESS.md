@@ -14,7 +14,7 @@ infrastructure lives outside this repo.
 | **M2** | `calls` (`CallHistory.storedata`) | **Complete** — `calls` package (first CoreData domain), gates green, differential passed; `calls.1` **validated** |
 | **M3** | `messages` — chats / messages / attachments join, typedstream text | **Complete** — `messages` package + `internal/typedstream` decoder, gates green, differential passed; `messages.1` **validated** |
 | **M4** | `calendar` (`Calendar.sqlitedb`) | **Complete** — `calendar` package (plain SQLite, join-heavy events + calendars), gates green, differential passed; `calendar.1` **validated** |
-| M5 | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | Pending |
+| **M5** | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | **Complete** — `notes` package + `internal/applenotes` gzip+protobuf decoder, gates green, differential passed; `notes.1` **validated** |
 | M6 | v0.1 — docs, examples, schema-coverage table, tag | Pending |
 
 ## M0 — schema spike (complete)
@@ -266,6 +266,78 @@ degradation, fixtures, gates, operator-local differential).
   updated in the same change. A pre-existing gofmt nit in
   `internal/typedstream/typedstream.go` (committed at M3, flagged by the current
   toolchain image's gofmt) was corrected in passing so the gates are green.
+
+## M5 — notes (complete)
+
+**Goal.** The `notes` domain (`NoteStore.sqlite`) — the second **CoreData** domain and
+the first with **single-table inheritance** (every entity in one `ZICCLOUDSYNCINGOBJECT`
+table, discriminated by `Z_ENT`), plus the second blob-decode hard part: every ordinary
+note's text lives only in a gzip+protobuf `ZICNOTEDATA.ZDATA` blob. Same shape as M1–M4
+(streaming iterators, eager validation, capability degradation, fixtures, gates,
+operator-local differential) **plus** a from-scratch note-body decoder. Locked notes are
+reported, never decrypted.
+
+**Delivered.**
+
+- **`internal/applenotes`** — a from-scratch decoder for the Apple Notes body blob:
+  gunzip (stdlib `compress/gzip`) then a minimal recursive-descent protobuf reader that
+  walks the fixed note-text path `document(2) → note(3) → note_text(2)` and returns the
+  plain text. Written from **public format docs only** (CCL/Ciofeca "Apple Notes"
+  write-ups; the protobuf wire spec; the field numbers as used by MIT iLEAPP `notes.py`),
+  independently confirmed against instrumented dumps; no GPL source read. Rich runs /
+  embedded objects deferred (U+FFFC placeholders kept verbatim). Unit-tested incl. a
+  **golden test asserting the encoder reproduces the real body header bytes**
+  (`08 00 12` … `08 00 10`), emoji/non-Latin/long round-trips, attachment-only (no
+  note_text → empty, not error), and not-gzip / no-document / truncated error paths.
+- **`notes`** domain: `Open` (eager `notes.1` validation), `Notes()` and `Folders()` as
+  `iter.Seq2`. **Entity ordinals are resolved from the `Z_PRIMARYKEY` map by name at
+  Open** (ICNote/ICFolder/ICAccount/ICAttachment/ICMedia), never hard-coded — a model
+  that renumbers entities still parses. Body = decoded `ZDATA` (`""` for a blank or
+  locked note); a present-but-undecodable blob → `BodyUndecoded` (body unknown, never a
+  silent empty). Folder (`ZFOLDER`) and account (`ZACCOUNT7`) resolve soft-nil
+  (LEFT-JOIN semantics); attachments = ICAttachment (`ZNOTE`) → ICMedia (`ZATTACHMENT1`),
+  media surfaced as a **resolvable `backup.FileRef`**
+  (`Accounts/<account>/Media/<id>/<generation>/<filename>`). Cocoa **seconds** timestamps.
+  The only row-scoped defect is a scan failure (no collection-integrity withhold, like
+  calendar).
+- **Schema re-confirmed before coding (the M2/M3/M4 lesson), correcting two M0 guesses.**
+  Read-only introspection of a scratch copy (originals never opened) pinned the exact
+  single-table-inheritance suffixes and caught *wrong-but-plausible* bugs: a note's
+  creation date is **`ZCREATIONDATE3`** (M0 said `ZCREATIONDATE`) and its account is
+  **`ZACCOUNT7`** (M0 said generic `ZACCOUNT*`); a note's title is `ZTITLE1` while a
+  folder's is `ZTITLE2`; the media path inserts a real `ZGENERATION1` generation
+  directory. The `(creation, account)` suffix pair is version-specific — a different pair
+  is a different fingerprint (`notes.2`), not a silent degradation. M0's `notes.md`
+  corrected in place (structure/interpretation only, no data).
+- Testing ladder rungs 1–3: builder-generated synthetic single-table-inheritance fixture
+  (committed; `make fixtures` regenerates) embedding **real gzip+protobuf bodies** and
+  using **deliberately non-standard `Z_ENT` ordinals** to prove the `Z_PRIMARYKEY`
+  resolution; round-trip + committed-fixture + degraded-schema + unsupported-schema +
+  Folders-unavailable + locked-reported + BodyUndecoded + blank-note + media-FileRef +
+  row/stream error-scoping tests. Containerized gates (gofmt / vet / golangci-lint /
+  `go test -race`) green on the project dev CT.
+- **Differential passed → `notes.1` validated.** iLEAPP's own `notes.py` returns **zero
+  rows** on the iOS-18 schema (it hard-codes the account join on `ZACCOUNT4`, which moved
+  to `ZACCOUNT7` — confirmed by its own `sample_data`), so its export is unusable as a
+  phase-1 oracle. The oracle is therefore split, still independent and MIT: iLEAPP's own
+  note-body decoder (`get_uncompressed_data` + `process_note_body_blob`, a fixed-offset
+  byte-walk) ported into `deploy/diff_notes.py` cross-checks the from-scratch Go decoder
+  **blob-for-blob**; Apple's stored `ZSNIPPET` cross-checks every decoded body; iLEAPP's
+  column choices re-run against a scratch copy (keyed by ICNote `Z_PK`, both-directions
+  set check) cross-check every metadata field, folder, account and attachment; and every
+  media `FileRef` is checked to exist on disk. All clean: every decoded body agreed with
+  the independent decoder and the stored snippet, every field matched the store, every
+  media FileRef resolved, the set matched exactly, zero row errors. The parser needed no
+  correctness change after the pre-coding introspection.
+- **Locked notes — designed + fixture-tested, real-backup differential deferred.** The
+  report-only path (present + `Locked` + `PasswordHint`, body not decrypted, not flagged
+  `BodyUndecoded`) is exercised by the fixture and designed from the schema's `ZCRYPTO*`
+  columns; confirming it on real data awaits a backup that exercises a locked note
+  (recorded as designed-and-fixture-tested, not asserted from study data).
+- `cmd/ibp-dump` gained `-domain notes` (note + folder line types);
+  `deploy/diff_notes.py` + `dump-study-notes` / `diff-study-notes` Makefile targets added;
+  `NOTICE`, `docs/schemas/notes.md`, `docs/schemas/README.md` and `README.md` updated in
+  the same change.
 
 ## Decisions log
 
@@ -534,3 +606,55 @@ restated in full.
   (`calendarAll.py` ships in the same iLEAPP v2026.1.0 image). A pre-existing gofmt nit
   in `internal/typedstream/typedstream.go` (committed at M3) that the current toolchain
   image's gofmt flags was corrected in passing to keep the gates green.
+- **M5 — single-table inheritance: entity ordinals resolved at run time, not assumed.**
+  Every Notes entity lives in `ZICCLOUDSYNCINGOBJECT` discriminated by `Z_ENT`; those
+  ordinals (ICNote 12, ICFolder 15, ICAccount 14, ICAttachment 5, ICMedia 11 on this
+  model) are per-model facts. The parser reads the `Z_PRIMARYKEY` entity map at Open and
+  looks entities up **by name**, never hard-coding `Z_ENT = 12` — the same detect-never-
+  assume rule the charter applies to schemas. The synthetic fixture uses deliberately
+  renumbered ordinals to prove the resolution. This is the single-table-inheritance
+  template a future CoreData single-table domain inherits (distinct from calls' one-table-
+  per-entity model).
+- **M5 — column-suffix fingerprint; two M0 guesses corrected by introspection.** Under
+  single-table inheritance CoreData suffixes colliding attributes, and the suffix a note
+  uses is version-specific. Introspection corrected M0: creation = `ZCREATIONDATE3` (not
+  `ZCREATIONDATE`), account = `ZACCOUNT7` (not generic `ZACCOUNT*`); note title `ZTITLE1`,
+  folder title `ZTITLE2`. `notes.1`'s Required is minimal (`ZICCLOUDSYNCINGOBJECT`
+  Z_PK/Z_ENT/ZIDENTIFIER, `Z_PRIMARYKEY` Z_ENT/Z_NAME, `ZICNOTEDATA` ZNOTE/ZDATA — the
+  body source, the headline deliverable); everything else is an Optional unit. A store
+  with a different `(creation, account)` suffix pair (the `ZCREATIONDATE1`/`ZACCOUNT2-3`
+  layout iLEAPP branches on) is a different fingerprint (`notes.2`), not invented now.
+- **M5 — the note body is gzip+protobuf; decoder is from-scratch and text-only.**
+  `ZICNOTEDATA.ZDATA` is gzip of a "Note Store proto"; the text is at the fixed path
+  `document(2) → note(3) → note_text(2)`. `internal/applenotes` gunzips then walks that
+  path with a minimal protobuf reader, returning `note_text` verbatim (U+FFFC embedded-
+  object placeholders kept; rich runs deferred, documented). Implemented from public
+  format docs + the MIT iLEAPP field numbers + own instrumented dumps; no GPL source
+  read. A present-but-undecodable blob → `Message`-style `BodyUndecoded` (body unknown),
+  a blank/NULL blob → empty body, a locked note → empty body (not decoded, not flagged
+  undecoded).
+- **M5 — media FileRef is resolvable and validated, not fabricated.** The media path is
+  `Accounts/<ICAccount.ZIDENTIFIER>/Media/<ICMedia.ZIDENTIFIER>/<ICMedia.ZGENERATION1>/<ICMedia.ZFILENAME>`;
+  `ZGENERATION1` (the `1_<uuid>` generation dir) is a real column, so every emitted
+  `FileRef` resolves to a real file (confirmed on disk in the differential) — unlike M4
+  calendar, where the file was absent and the FileRef was deferred. A non-media
+  attachment (table/drawing/link) surfaces metadata only, no FileRef (never-fabricate).
+- **M5 — locked notes report-only (charter v0.1); real-data validation deferred.** A
+  password-protected note is yielded present with `Locked` + `PasswordHint`, body empty,
+  never decrypted and never `BodyUndecoded`. Exercised by the fixture and designed from
+  the `ZCRYPTO*` schema; a real-backup differential of a locked note awaits a backup that
+  exercises one.
+- **M5 — differential: iLEAPP's notes export is broken on iOS 18, so the oracle is
+  split.** iLEAPP `notes.py` hard-codes the account INNER JOIN on `ZACCOUNT4` and returns
+  zero note rows on the iOS-17/18 schema (its own `sample_data` records "0 rows"). So the
+  oracle is: iLEAPP's own note-body decoder (`get_uncompressed_data` +
+  `process_note_body_blob`) ported into `deploy/diff_notes.py` as an independent
+  blob-for-blob decoder check; Apple's stored `ZSNIPPET` as a second body oracle; iLEAPP's
+  column choices re-run against a scratch copy (ICNote `Z_PK`-keyed, both-directions set
+  check) for metadata/folder/account/attachments; and on-disk existence for every media
+  FileRef. `apple_cloud_notes_parser` is documented as a black-box manual escalation. All
+  clean on first run after the pre-coding introspection.
+- **M5 — pins.** No new Go module dependencies (`internal/applenotes` is stdlib-only;
+  `notes` uses stdlib + the internal packages); `go.mod`/`go.sum` unchanged. Same
+  toolchain + iLEAPP oracle pins as M1–M4 (`notes.py` ships in the same iLEAPP v2026.1.0
+  image; it credits mac_apt's Notes plugin, MIT — attributed in `NOTICE`).

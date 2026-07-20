@@ -16,10 +16,11 @@ import (
 	"github.com/novkostya/ios-backup-parser/calls"
 	"github.com/novkostya/ios-backup-parser/contacts"
 	"github.com/novkostya/ios-backup-parser/messages"
+	"github.com/novkostya/ios-backup-parser/notes"
 )
 
 type line struct {
-	Type       string             `json:"type"` // capability | person | group | call | message | chat | event | calendar | row_error | note
+	Type       string             `json:"type"` // capability | person | group | call | message | chat | event | calendar | note | folder | row_error | unavailable
 	Capability *backup.Capability `json:"capability,omitempty"`
 	Person     *contacts.Person   `json:"person,omitempty"`
 	Group      *contacts.Group    `json:"group,omitempty"`
@@ -28,12 +29,14 @@ type line struct {
 	Chat       *messages.Chat     `json:"chat,omitempty"`
 	Event      *calendar.Event    `json:"event,omitempty"`
 	Calendar   *calendar.Calendar `json:"calendar,omitempty"`
+	Note       *notes.Note        `json:"note,omitempty"`
+	Folder     *notes.Folder      `json:"folder,omitempty"`
 	Error      string             `json:"error,omitempty"`
 }
 
 func main() {
 	root := flag.String("root", "", "path to a decrypted <Domain>/<relativePath> backup tree")
-	domain := flag.String("domain", "contacts", "domain to dump (contacts, calls, messages, calendar)")
+	domain := flag.String("domain", "contacts", "domain to dump (contacts, calls, messages, calendar, notes)")
 	flag.Parse()
 	if *root == "" {
 		flag.Usage()
@@ -62,6 +65,8 @@ func run(root, domain string) error {
 		return dumpMessages(fsys, enc)
 	case "calendar":
 		return dumpCalendar(fsys, enc)
+	case "notes":
+		return dumpNotes(fsys, enc)
 	default:
 		return fmt.Errorf("unknown domain %q", domain)
 	}
@@ -220,6 +225,52 @@ func dumpCalendar(fsys backup.FS, enc *json.Encoder) error {
 			}
 		case errors.Is(err, backup.ErrUnavailable):
 			if err := enc.Encode(line{Type: "note", Error: err.Error()}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func dumpNotes(fsys backup.FS, enc *json.Encoder) error {
+	n, err := notes.Open(fsys)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = n.Close() }()
+
+	capability := n.Capability()
+	if err := enc.Encode(line{Type: "capability", Capability: &capability}); err != nil {
+		return err
+	}
+	for note, err := range n.Notes() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "note", Note: &note}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	for folder, err := range n.Folders() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "folder", Folder: &folder}); err != nil {
+				return err
+			}
+		case errors.Is(err, backup.ErrUnavailable):
+			if err := enc.Encode(line{Type: "unavailable", Error: err.Error()}); err != nil {
 				return err
 			}
 		case isRowError(err):
