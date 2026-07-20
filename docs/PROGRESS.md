@@ -13,7 +13,7 @@ infrastructure lives outside this repo.
 | **M1** | Core + `contacts` — `BackupFS`, introspection helpers, capability report | **Complete** — `backup` + `contacts` packages, gates green, differential passed; `contacts.1` **validated** |
 | **M2** | `calls` (`CallHistory.storedata`) | **Complete** — `calls` package (first CoreData domain), gates green, differential passed; `calls.1` **validated** |
 | **M3** | `messages` — chats / messages / attachments join, typedstream text | **Complete** — `messages` package + `internal/typedstream` decoder, gates green, differential passed; `messages.1` **validated** |
-| M4 | `calendar` (`Calendar.sqlitedb`) | Pending |
+| **M4** | `calendar` (`Calendar.sqlitedb`) | **Complete** — `calendar` package (plain SQLite, join-heavy events + calendars), gates green, differential passed; `calendar.1` **validated** |
 | M5 | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | Pending |
 | M6 | v0.1 — docs, examples, schema-coverage table, tag | Pending |
 
@@ -203,6 +203,69 @@ validation, capability degradation, fixtures, gates, operator-local differential
 - `cmd/ibp-dump` gained `-domain messages`; `deploy/diff_messages.py` +
   `dump-study-messages` / `diff-study-messages` Makefile targets added; `NOTICE`,
   `docs/schemas/messages.md` and `README.md` updated in the same change.
+
+## M4 — calendar (complete)
+
+**Goal.** The `calendar` domain (`Calendar.sqlitedb`) — plain app SQLite (EventKit's
+own schema) but the most join-heavy domain so far: each event fans out to a calendar
+/ account, a location, an organizer, invitees, recurrence rules, alarms and
+attachments. Same shape as M1–M3 (streaming iterators, eager validation, capability
+degradation, fixtures, gates, operator-local differential).
+
+**Delivered.**
+
+- **`calendar`** domain: `Open` (eager `calendar.1` validation), `Events()` and
+  `Calendars()` as `iter.Seq2`. The open handle is `calendar.Reader` (the record
+  type `Calendar` — one calendar in the list — takes the natural name). `Events()`
+  streams each `CalendarItem` in ROWID order with its children resolved through
+  owner-keyed lookups preloaded once per iteration (no per-event N+1); `Calendars()`
+  streams the calendar list with its account/store. Timestamps are Cocoa **seconds**
+  (`cocoa.FromSecondsFloat`, REAL) — the sentinel/floating-date caveat is documented,
+  not mishandled. `Event.Floating()` detects the `_float` timezone sentinel;
+  `Location.HasCoordinates()` mirrors iLEAPP's `0,0`-is-absent guard.
+- **Schema re-confirmed before coding (the M2/M3 lesson), correcting an M0 guess.**
+  Read-only introspection of a scratch copy (originals never opened) pinned the exact
+  structure and caught a would-be *wrong-but-plausible* bug: M0 recorded
+  `CalendarItem.entity_type` as the event/reminder discriminator, but it is a single
+  uniform value across the store — the real events-vs-birthdays split is
+  **`calendar_scale`** (events = `IS NOT 'gregorian'`; birthday items, a distinct kind
+  with a special date encoding, are excluded). Introspection also pinned the join
+  directions (location *forward* via `CalendarItem.location_id`; participants /
+  recurrence / alarms / attachments *back* via their `owner_id` columns), that
+  `Participant.entity_type` is 7 for invitees / 8 for the organizer, that `Identity`
+  has no declared `ROWID` (implicit rowid), and that `Location.latitude`/`longitude`
+  hold REAL despite an INTEGER declaration. All cross-referenced against iLEAPP's
+  `calendarAll.py` (MIT, attributed in `NOTICE`).
+- Testing ladder rungs 1–3: builder-generated synthetic fixture (committed,
+  `make fixtures` regenerates) exercising a full event, a floating all-day event, an
+  excluded gregorian birthday, a dangling-calendar soft-nil, and a corrupt-`start_date`
+  row-scoped defect; round-trip + committed-fixture + `Calendars()` + degraded-schema
+  + calendars-unavailable + unsupported-schema + birthday-exclusion/floating +
+  row/stream error-scoping tests. Containerized gates (gofmt / vet / golangci-lint /
+  `go test -race`) green on the project dev CT. Coverage: `calendar` 83.8%
+  (`backup` 81.8%, `calls` 83.0%, `contacts` 80.4%, `messages` 79.6%,
+  `internal/typedstream` 75.6%, `internal/introspect` 90.7%, `internal/cocoa` 100%;
+  debug CLI `cmd/ibp-dump` untested by design).
+- **Differential vs iLEAPP passed → `calendar.1` validated.** Phase 1 (iLEAPP's
+  Calendar Events export, black-box) and phase 2 (oracle-logic: `calendarAll.py`'s
+  query semantics re-run against a scratch copy, keyed by `CalendarItem.ROWID`)
+  cross-checked **every event** on start/end time, timezone, all-day, calendar +
+  account, location, organizer, invitees (email + status), conference URL, notes,
+  status/availability/privacy, recurrence, alarms and attachments — **zero
+  mismatches**, with the both-directions exact set check (no invented, no
+  silently-dropped event) passing. Zero row errors; empty `Capability.Missing` (the
+  observed schema carries every optional unit). The parser needed **no changes**: the
+  first run was clean under the ROWID-exact phase 2. Phase 1 initially flagged a
+  handful of events — all traced to the harness keying colliding on `(start, title)`
+  for events that legitimately share both (a holiday duplicated across calendars,
+  paired train-ticket bookings); the harness was corrected to a full-field multiset
+  match (parser untouched), after which both phases are clean.
+- `cmd/ibp-dump` gained `-domain calendar` (events + calendars);
+  `deploy/diff_calendar.py` + `dump-study-calendar` / `diff-study-calendar` Makefile
+  targets added; `NOTICE`, `docs/schemas/calendar.md` and `docs/schemas/README.md`
+  updated in the same change. A pre-existing gofmt nit in
+  `internal/typedstream/typedstream.go` (committed at M3, flagged by the current
+  toolchain image's gofmt) was corrected in passing so the gates are green.
 
 ## Decisions log
 
@@ -413,3 +476,61 @@ restated in full.
 - **M3 — pins.** No new Go module dependencies (`internal/typedstream` is stdlib-only;
   `messages` uses stdlib + the internal packages); `go.mod`/`go.sum` unchanged. Same
   toolchain + iLEAPP oracle pins as M1/M2 (`sms.py` ships in the same iLEAPP image).
+- **M4 — events/birthdays discriminator is `calendar_scale`, not `entity_type`
+  (M0 guess corrected by introspection).** M0's `calendar.md` recorded
+  `CalendarItem.entity_type` as the event/reminder discriminator; the real store has a
+  single uniform `entity_type` (reminders live in a separate store, absent here). The
+  events set is `calendar_scale IS NOT 'gregorian'`; the `'gregorian'` rows are
+  **birthday items**, a distinct kind whose `start_date` uses a special encoding
+  (iLEAPP decodes them in a separate artifact). `Events()` streams the former and
+  **excludes** the latter — matching iLEAPP's `calendarAll.py` split and avoiding the
+  wrong-but-plausible birthday-date trap. `entity_type` is surfaced raw (its own
+  optional unit). A birthday reader is deferred (forward note). `docs/schemas/calendar.md`
+  corrected in place (structure/interpretation only, no data).
+- **M4 — domain handle named `Reader`; two streams.** The natural domain-noun handle
+  (`Calendar`) collides with the record type `Calendar` (one calendar in the list,
+  embedded as `Event.Calendar`), which deserves the natural name; the open handle is
+  therefore `calendar.Reader` (idiomatic Go). The domain exposes `Events()` (the
+  primary stream) and `Calendars()` (the calendar list, yielding `ErrUnavailable` when
+  the calendar tables are absent), mirroring the two-stream shape of contacts
+  (People/Groups) and messages (Messages/Chats).
+- **M4 — descriptive references are soft-nil (LEFT-JOIN), matching the oracle.**
+  Calendar/location/organizer resolve to nil when their id does not resolve (never
+  withholding the event), exactly as iLEAPP LEFT-JOINs them; withholding would fail the
+  differential's both-directions set check. Unlike calls/messages, calendar has no
+  collection-integrity withhold case (children are gathered from the child side by
+  `owner_id`, so a dangling reference cannot silently shrink a set); the row-scoped
+  defect path is the scan-failure case (e.g. a corrupt `start_date`) → `*backup.RowError`,
+  stream continues. Children are preloaded into owner-keyed maps once per iteration
+  (no per-event N+1), the same bounded-lookup pattern as contacts' `loadLookups`.
+- **M4 — calendar attachments surface metadata, no `FileRef` (never-fabricate hard
+  rule).** On the observed schema calendar attachments are server-side references
+  (`AttachmentFile.local_path` NULL; `url` a mail content-id), so the file is not in
+  the backup; emitting a `backup.FileRef` would fabricate a path, which the charter
+  forbids. `calendar.Attachment` surfaces filename/size/uuid/url/local_path verbatim
+  and emits no FileRef. This satisfies the charter's structured-reference intent (no
+  bare path that lost its domain) while honoring never-fabricate; a validated
+  backup-path convention (and a FileRef) is deferred until a backup exercises a
+  downloaded calendar attachment. `ExceptionDate` (recurrence exceptions) is also
+  deferred — iLEAPP does not surface it and the recurrence rule stands without it.
+- **M4 — enum interpretation sources.** `Participant.status` (0/7 no response,
+  1 accepted, 2 declined, 3 maybe), `Participant.entity_type` (7 invitee / 8 organizer)
+  and `Calendar.sharing_status` (0/1/2) are cross-referenced from iLEAPP `calendarAll.py`
+  (MIT, attributed) and validated differentially. `CalendarItem.status` / `availability`
+  / `privacy_level`, `Participant.role` / `type`, `Recurrence.frequency`, and
+  `Alarm.type` / `proximity` are surfaced raw (no MIT oracle, no differential coverage of
+  the mapping) — the same raw-code discipline as calls' `Handle.Type` and contacts'
+  `GroupMember.Type`.
+- **M4 — differential harness: full-field phase 1, ROWID-exact phase 2.** Phase 2
+  (iLEAPP's query semantics re-run against a scratch copy, keyed by `CalendarItem.ROWID`,
+  both-directions set check) is the authoritative gate and was clean on the first parser
+  run. Phase 1 (iLEAPP's Calendar Events export) initially mispaired a few events because
+  distinct events can share `(start, title)` — a holiday duplicated across calendars,
+  paired train-ticket bookings — so the harness was corrected to match on the **full**
+  compared-field tuple (a coarse key invents mismatches; the parser was never wrong). No
+  real conference detected-vs-stored divergence surfaced (full-field phase 1 is clean).
+- **M4 — pins.** No new Go module dependencies (`calendar` uses stdlib + the internal
+  packages); `go.mod`/`go.sum` unchanged. Same toolchain + iLEAPP oracle pins as M1–M3
+  (`calendarAll.py` ships in the same iLEAPP v2026.1.0 image). A pre-existing gofmt nit
+  in `internal/typedstream/typedstream.go` (committed at M3) that the current toolchain
+  image's gofmt flags was corrected in passing to keep the gates green.

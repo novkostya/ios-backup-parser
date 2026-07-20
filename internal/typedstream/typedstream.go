@@ -388,7 +388,7 @@ func (d *decoder) class() (*class, error) {
 		d.pos++
 		slot := len(d.objects)
 		d.objects = append(d.objects, nil) // reserve the class's object-table slot
-		name, err := d.sharedString()       // the name lands in the STRING table
+		name, err := d.sharedString()      // the name lands in the STRING table
 		if err != nil {
 			return nil, err
 		}

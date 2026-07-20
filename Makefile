@@ -194,6 +194,34 @@ diff-study-messages: dump-study-messages tc-ileapp ## Operator-local differentia
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_messages.py /src/.difftmp \
 	    --db /study/HomeDomain/Library/SMS/sms.db
 
+.PHONY: dump-study-calendar
+dump-study-calendar: tc-go ## Operator-local: stream calendar events from the study tree to .difftmp/parser-calendar.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain calendar > .difftmp/parser-calendar.jsonl && \
+	    wc -l .difftmp/parser-calendar.jsonl'
+
+# Same input-type caveat as diff-study (see above): iLEAPP's calendar artifact
+# globs `*/Calendar.sqlitedb`, so an fs-mode run over the backup-domain tree needs
+# the DB staged into a /private/var/mobile/… shim. iLEAPP's calendarAll.py splits
+# events from birthday items by calendar_scale (events = NOT 'gregorian'), which
+# the parser mirrors; phase 1 compares its Calendar Events export and phase 2
+# re-runs its query semantics against a scratch copy (keyed by CalendarItem.ROWID,
+# both-directions set check) to cover the fields the export omits (recurrence,
+# alarms, status/availability/privacy).
+.PHONY: diff-study-calendar
+diff-study-calendar: dump-study-calendar tc-ileapp ## Operator-local differential: parser vs iLEAPP calendar, record-by-record
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) sh -euc '\
+	    rm -rf /src/.difftmp/ileapp-calendar && mkdir -p /src/.difftmp/ileapp-calendar && \
+	    stage=$$(mktemp -d)/private/var/mobile/Library/Calendar && mkdir -p "$$stage" && \
+	    cp /study/HomeDomain/Library/Calendar/Calendar.sqlitedb* "$$stage"/ && \
+	    python /opt/iLEAPP/ileapp.py -t fs -i "$${stage%%/private/var/*}" -o /src/.difftmp/ileapp-calendar'
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_calendar.py /src/.difftmp \
+	    --db /study/HomeDomain/Library/Calendar/Calendar.sqlitedb
+
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images
 	-$(RUNTIME) run --rm -v $(ROOT):/src $(ALPINE_IMAGE) rm -rf /src/.difftmp

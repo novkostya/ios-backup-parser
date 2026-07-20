@@ -39,6 +39,19 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   also the differential oracle for messages (its SMS export in phase 1; its query
   semantics re-run in phase 2).
 
+  M4 (calendar) additionally cross-referenced scripts/artifacts/calendarAll.py
+  for the calendar interpretations: the events/birthday split by calendar_scale
+  (events = NOT 'gregorian'), the join topology (CalendarItem.location_id →
+  Location, CalendarItem.calendar_id → Calendar → Store, CalendarItem.organizer_id
+  → Participant → Identity, invitees = Participant.owner_id with entity_type = 7,
+  Attachment.owner_id / file_id → AttachmentFile), the Participant.status mapping
+  (0/7 no response, 1 accepted, 2 declined, 3 maybe), Calendar.sharing_status
+  (0/1/2), the "_float" floating-timezone sentinel, and the Cocoa-seconds
+  timestamp conversion — attributed inline in calendar/schema.go,
+  calendar/types.go and deploy/diff_calendar.py. iLEAPP is also the differential
+  oracle for calendar (its Calendar Events export in phase 1; its query semantics
+  re-run in phase 2).
+
 typedstream format (M3 internal/typedstream)
 --------------------------------------------
 
