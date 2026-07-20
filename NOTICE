@@ -30,6 +30,38 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   and ZANSWERED (0/1) — attributed inline in calls/types.go and
   deploy/diff_calls.py. iLEAPP is also the differential oracle for calls.
 
-imessage-exporter (GPL) is used ONLY as a black-box differential oracle — executed
-and compared against, never read or ported. No GPL-licensed code is incorporated
-into this repository.
+  M3 (messages) additionally cross-referenced scripts/artifacts/sms.py for the
+  message interpretations: the prefer-text-else-decode-attributedBody rule, the
+  nanosecond timestamp guard, the message/handle/chat/attachment join topology,
+  and the chat.style (43 group / 45 direct), associated_message_type (2000-range
+  tapback add / 3000-range remove) and item_type conventions — attributed inline
+  in messages/schema.go, messages/types.go and deploy/diff_messages.py. iLEAPP is
+  also the differential oracle for messages (its SMS export in phase 1; its query
+  semantics re-run in phase 2).
+
+typedstream format (M3 internal/typedstream)
+--------------------------------------------
+
+  The typedstream (streamtyped NSArchiver) decoder was implemented FROM PUBLIC
+  FORMAT DOCUMENTATION ONLY, per the charter's license hygiene:
+
+  - Chris Sardegna (ReagentX), "Reverse Engineering Apple's typedstream Format" —
+    a prose write-up (the imessage-exporter author's published reverse-engineering
+    notes; facts about a file format are not copyrightable).
+  - dgelessus/python-typedstream (LGPL-3.0-or-later) — its DOCSTRINGS were
+    consulted for format facts (notably the two-table shared-reference model: a
+    separate shared-string table and shared-object table, each numbered from
+    0x92). Function bodies were NOT read and NO code was ported; only the
+    documented format facts were used.
+  - The file(1) magic database (header bytes) and archived NeXT/GNUstep NSArchiver
+    notes.
+
+  python-typedstream is ALSO the independent decoder used as the differential
+  oracle for the messages typedstream text (via iLEAPP's sms.py, and directly in
+  deploy/diff_messages.py phase 2) — a from-scratch Go decoder validated against a
+  different implementation.
+
+imessage-exporter (GPL) and crabstep (its Rust typedstream deserializer) are used
+ONLY as black-box differential oracles — executed and compared against, never read
+or ported (see the diff-study-messages Makefile target for the documented manual
+cross-check). No GPL-licensed code is incorporated into this repository.

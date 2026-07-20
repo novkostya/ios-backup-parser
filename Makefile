@@ -155,6 +155,45 @@ diff-study-calls: dump-study-calls tc-ileapp ## Operator-local differential: par
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_calls.py /src/.difftmp \
 	    --db /study/HomeDomain/Library/CallHistoryDB/CallHistory.storedata
 
+.PHONY: dump-study-messages
+dump-study-messages: tc-go ## Operator-local: stream messages from the study tree to .difftmp/parser-messages.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain messages > .difftmp/parser-messages.jsonl && \
+	    wc -l .difftmp/parser-messages.jsonl'
+
+# Same input-type caveat as diff-study (see above): iLEAPP's sms artifact globs
+# `*/Library/SMS/sms.db*`, so an fs-mode run over the backup-domain tree needs the
+# DB staged into a /private/var/mobile/… shim. iLEAPP decodes attributedBody with
+# the independent python-typedstream library, so phase 1 (its SMS export) and
+# phase 2 (diff_messages.py re-running python-typedstream against a scratch copy,
+# keyed by message.ROWID with an exact both-directions set check) together
+# cross-check our from-scratch Go typedstream decoder against a different
+# implementation. Phase 2 alone is comprehensive and does NOT require the full
+# iLEAPP run, so it still validates even on a very large sms.db.
+#
+# STRONGER, CHARTER-NAMED MANUAL ESCALATION — imessage-exporter (GPL, BLACK BOX
+# ONLY: run it, diff its output; its source is NEVER read). Install the published
+# binary operator-side (e.g. `cargo install imessage-exporter`, or a release
+# binary) — NO source clone lands in this repo or its scratch — then export the
+# study db to text and diff against .difftmp/parser-messages.jsonl:
+#     imessage-exporter -f txt -p <study>/HomeDomain/Library/SMS -o .difftmp/ime
+# and compare message bodies per conversation. Deliberately not wired into the
+# default oracle image (a Rust build is heavy; python-typedstream already gives an
+# independent decoder), matching M1's documented `-t itunes` escalation.
+.PHONY: diff-study-messages
+diff-study-messages: dump-study-messages tc-ileapp ## Operator-local differential: parser vs iLEAPP messages, record-by-record
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) sh -euc '\
+	    rm -rf /src/.difftmp/ileapp-messages && mkdir -p /src/.difftmp/ileapp-messages && \
+	    stage=$$(mktemp -d)/private/var/mobile/Library/SMS && mkdir -p "$$stage" && \
+	    cp /study/HomeDomain/Library/SMS/sms.db* "$$stage"/ && \
+	    python /opt/iLEAPP/ileapp.py -t fs -i "$${stage%%/private/var/*}" -o /src/.difftmp/ileapp-messages'
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_messages.py /src/.difftmp \
+	    --db /study/HomeDomain/Library/SMS/sms.db
+
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images
 	-$(RUNTIME) run --rm -v $(ROOT):/src $(ALPINE_IMAGE) rm -rf /src/.difftmp

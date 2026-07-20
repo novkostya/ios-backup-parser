@@ -19,6 +19,10 @@ data structures and iterators you can build on.
   loudly; the library never guesses.
 - **Schema-aware** — iOS database schemas drift between versions; support is
   detected by introspection, never assumed from a version string.
+- **Decodes what Apple hides** — modern message bodies live in an `attributedBody`
+  typedstream blob, not the `text` column; the `messages` domain decodes it (a
+  from-scratch, dependency-free typedstream reader) so a message body is never
+  silently dropped.
 
 ## Use
 

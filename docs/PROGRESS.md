@@ -12,7 +12,7 @@ infrastructure lives outside this repo.
 | **M0** | Schema spike — document the real schemas of the five domains (docs-only) | **Complete** — five domain docs committed; fingerprints `observed` |
 | **M1** | Core + `contacts` — `BackupFS`, introspection helpers, capability report | **Complete** — `backup` + `contacts` packages, gates green, differential passed; `contacts.1` **validated** |
 | **M2** | `calls` (`CallHistory.storedata`) | **Complete** — `calls` package (first CoreData domain), gates green, differential passed; `calls.1` **validated** |
-| M3 | `messages` — chats / messages / attachments join, typedstream text | Pending |
+| **M3** | `messages` — chats / messages / attachments join, typedstream text | **Complete** — `messages` package + `internal/typedstream` decoder, gates green, differential passed; `messages.1` **validated** |
 | M4 | `calendar` (`Calendar.sqlitedb`) | Pending |
 | M5 | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | Pending |
 | M6 | v0.1 — docs, examples, schema-coverage table, tag | Pending |
@@ -139,6 +139,70 @@ operator-local differential.
 - `cmd/ibp-dump` gained `-domain calls`; `deploy/diff_calls.py` +
   `dump-study-calls` / `diff-study-calls` Makefile targets added; `NOTICE` and
   `docs/schemas/calls.md` updated in the same change.
+
+## M3 — messages (complete)
+
+**Goal.** The `messages` domain (`sms.db`) — the project's headline domain and its
+known hard part: message text on modern iOS lives in a typedstream `attributedBody`
+blob, not the `text` column. Same shape as M1/M2 (streaming iterators, eager
+validation, capability degradation, fixtures, gates, operator-local differential)
+**plus** a from-scratch typedstream decoder.
+
+**Delivered.**
+
+- **`internal/typedstream`** — a recursive-descent decoder for Apple's streamtyped
+  NSArchiver format, extracting the plain text of an `NSAttributedString`'s backing
+  `NSString`. Written from **public prose format docs only** (Sardegna write-up;
+  python-typedstream *docstrings* — LGPL, facts only, bodies unread, no code ported;
+  file(1) magic; GNUstep notes); the GPL imessage-exporter / crabstep source is never
+  read (black-box oracles only). Unit-tested incl. a **golden test asserting the
+  encoder reproduces the real study-backup header bytes**, multi-byte lengths, emoji,
+  empty, truncated-errors-not-empty, and a bare-`NSString` root.
+- **`messages`** domain: `Open` (eager `messages.1` validation), `Messages()` and
+  `Chats()` as `iter.Seq2`; body = `text` when it has real content else the decoded
+  `attributedBody`; sender/handle resolution; the `chat_message_join` M:N as
+  `Message.ChatIDs`; attachments via `message_attachment_join → attachment` surfaced as
+  `backup.FileRef` into `MediaDomain` (NULL filename → absent, never fabricated);
+  tapbacks / edits / replies-threads / app-message balloons as capability-gated fields;
+  nanosecond timestamps via `cocoa.FromNanoseconds` (the lone nanosecond domain).
+  Dangling handle / attachment references are row-scoped defects.
+- **Decode-failure contract (Operator amendment).** A sole-source `attributedBody`
+  that fails to decode is surfaced with `Message.BodyUndecoded = true` (body *unknown*,
+  metadata intact) — never streamed as an empty message. On the real backup this is
+  **0** after the decoder was corrected (see below).
+- **Schema re-confirmed before coding (the M2 lesson).** Read-only introspection of a
+  scratch copy pinned the exact structure and enum spaces: `chat.style` {45 direct,
+  43 group}, `associated_message_type` {2000–2007 add / 3000–3006 remove}, `item_type`
+  {0–5}, and every optional unit present. Interpretations stay documented-not-asserted;
+  the parser surfaces raw codes with range helpers.
+- Testing ladder rungs 1–3: builder-generated synthetic `sms.db` fixture embedding
+  **real typedstream blobs** (committed; `make fixtures` regenerates), round-trip +
+  committed-fixture + degraded-schema + unsupported-schema + row/stream error-scoping +
+  chats-unavailable + BodyUndecoded + tapback/group-helper tests; containerized gates
+  (gofmt / vet / golangci-lint / `go test -race`) green on the project dev CT.
+  Coverage: `messages` 79.6%, `internal/typedstream` 75.6% (`calls` 83.0%,
+  `contacts` 80.4%, `internal/introspect` 90.7%, `internal/cocoa` 100%; the debug CLI
+  `cmd/ibp-dump` and the fixture/round-trip encoder untested by design).
+- **Differential vs iLEAPP passed → `messages.1` validated.** Phase 1 (iLEAPP's SMS
+  export, black-box) and phase 2 (oracle-logic: iLEAPP's query semantics + its own
+  decoder, python-typedstream, re-run against a scratch copy, keyed by `message.ROWID`)
+  cross-checked **every message** on text (incl. every typedstream-decoded body),
+  timestamp, service, direction, associated-message type, handle, chat ids and
+  attachments, and every chat on participants — **zero mismatches**, with the
+  both-directions exact set check (no invented, no silently-dropped message) passing.
+  Zero row errors; empty `Capability.Missing` (the observed schema carries every
+  optional unit).
+- **The differential earned its architecture.** The first real-data run flagged a
+  substantial share of message bodies failing to decode; the oracle cross-check proved
+  they were a *decoder bug*, not text-less messages — typedstream uses **two
+  independent reference tables** (strings vs objects/classes), not one, which the
+  observed bytes and python-typedstream's docstrings confirmed. The single-table model
+  decoded the short `NSAttributedString` chain by luck but mis-resolved the longer
+  `NSMutableAttributedString` superclass chain. After the fix, `body_undecoded` was
+  zero across the whole backup.
+- `cmd/ibp-dump` gained `-domain messages`; `deploy/diff_messages.py` +
+  `dump-study-messages` / `diff-study-messages` Makefile targets added; `NOTICE`,
+  `docs/schemas/messages.md` and `README.md` updated in the same change.
 
 ## Decisions log
 
@@ -300,3 +364,52 @@ restated in full.
   host compile in the identical pinned toolchain container (docker autodetected on the
   runner). `actions/checkout` pinned to **v7** (node24 runtime) — looked up live per
   the pins rule; older majors emit deprecated-Node warnings.
+- **M3 — Capability stays four fields (Operator ruling).** The "present-but-partial"
+  field the M1 log scheduled for "when the first domain needs it (M3)" is **not** added:
+  plain text from typedstream is *complete*, so nothing is partial data. Rich runs
+  (mentions/formatting) are deferred for v0.1 and documented, not modeled as a
+  capability; per-record app-message/tapback signals are `Message` fields. `Capability`
+  remains `{Domain, Supported, Schema, Missing}`.
+- **M3 — full validation this session (Operator ruling).** Re-introspect the real
+  `sms.db`, drive gates on the dev CT, and run the differential → target `messages.1`
+  validated (achieved).
+- **M3 — typedstream two-table reference model (the decoder trap, confirmed on real
+  data).** streamtyped uses TWO independent shared-reference tables — one for strings
+  (type-encodings, class names), one for objects/classes — each numbered from 0x92; a
+  back-reference indexes the table matching its context, and an object's number is
+  assigned before its class. A single combined table decodes `NSAttributedString →
+  NSObject` by luck but mis-resolves the longer `NSMutableAttributedString` chain
+  (~16% of real bodies). Caught by the differential (parser-fail vs oracle-success),
+  root-caused via python-typedstream's docstrings (LGPL — facts only). The decoder is
+  text-only (backing string); attribute runs are deferred.
+- **M3 — decode-failure semantics (Operator amendment).** A sole-source
+  `attributedBody` that fails to decode → `Message.BodyUndecoded = true` (body unknown,
+  record still yielded), never a silent empty message. U+FFFC (attachment-position
+  placeholder) is stripped from extracted text.
+- **M3 — differential both-directions + named asymmetries (Operator amendment).** The
+  harness asserts parser *misses* as well as inventions (exact ROWID-set equality: db
+  rows == yielded ids + row-errored ids). Named asymmetries: iLEAPP's LEFT-JOIN row
+  expansion (regrouped by Message Row ID) and U+FFFC (normalized on both sides — iLEAPP
+  does not strip it). Oracle = iLEAPP: phase 1 black-box SMS export, phase 2 its query
+  semantics + its own decoder (python-typedstream) re-run against a scratch copy — an
+  independent decoder validating our from-scratch Go one.
+- **M3 — iteration model.** `Messages()` flat in (date, ROWID) order + a `Chats()`
+  stream with resolved participants; `Message.ChatIDs []int64` for the
+  `chat_message_join` M:N. Plain text is the M3 typedstream deliverable.
+- **M3 — fingerprint shape.** `Required` minimal (`message` anchor + guid/text/date/
+  is_from_me/handle_id). Everything degradable is an Optional unit → `Missing[]`
+  (`attributed_text`, `service`, `delivery`, `tapbacks`, `tapback_emoji`, `edits`,
+  `threads`, `app_messages`, `group_events`, `handles`, `chats`, `attachments`);
+  `attributedBody` is Optional (honest degrade to text-only), not Required. iOS-18-era
+  columns the parser does not surface (satellite/off-grid, key-transparency,
+  scheduled-send) are deliberately NOT units — a `Missing[]` name must map to a record
+  field the parser provides.
+- **M3 — imessage-exporter oracle: documented manual escalation.** iLEAPP is the
+  containerized default oracle and already supplies an independent typedstream decoder
+  (python-typedstream), so imessage-exporter (GPL, black-box only, source never read)
+  is documented as the stronger manual cross-check in the `diff-study-messages`
+  Makefile target rather than wired into the default image (a Rust build is heavy) —
+  mirroring M1's documented `-t itunes` escalation.
+- **M3 — pins.** No new Go module dependencies (`internal/typedstream` is stdlib-only;
+  `messages` uses stdlib + the internal packages); `go.mod`/`go.sum` unchanged. Same
+  toolchain + iLEAPP oracle pins as M1/M2 (`sms.py` ships in the same iLEAPP image).
