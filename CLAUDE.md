@@ -240,9 +240,11 @@ is plain SQLite, near-certainly populated, and iLEAPP has strong coverage → a 
 two-oracle differential that reliably reaches `validated`. **Voicemail is NOT first
 despite being smallest:** visual-voicemail storage is carrier-dependent, so the study
 backup may hold zero VVM rows — a domain that can only reach `observed`, not
-`validated`, is a poor opener. Suggested sequence: **safari → reminders → voicemail →
-whatsapp** (whatsapp last: a hostile third party churns its schema). Post-v0.1 these
-are M7+; each is its own milestone, its own CHANGELOG entry, its own fingerprint.
+`validated`, is a poor opener. **Scope revised 2026-07-20 (Operator):** safari (M7) and
+reminders (M8) done. **voicemail DE-PRIORITIZED, whatsapp DE-SCOPED** (see their entries);
+**photos under active reconsideration as the one remaining feasible domain — as METADATA
+only.** Post-v0.1 domains are M7+; each is its own milestone, CHANGELOG entry, and
+fingerprint.
 
 - **safari** — bookmarks + reading list (`Bookmarks.db`, plain SQLite; the reading
   list lives inside it) and history. Spike caveat: which Safari artifacts are
@@ -252,14 +254,31 @@ are M7+; each is its own milestone, its own CHANGELOG entry, its own fingerprint
 - **reminders** — its own store since ~iOS 13 (the M0 calendar doc recorded
   `CalendarItem`'s reminder columns as present-but-unused for exactly this
   reason); location + idiom (expect CoreData) established by its spike.
-- **voicemail** — small metadata DB + real audio files; likely the easiest win
-  on this list.
-- **whatsapp** — `ChatStorage.sqlite`; the consumer's roadmap already names it.
-- **photos** — **stays parked, deliberately** (charter non-goal): the consumer's
-  Operator ruling covers photos elsewhere (icloudpd + Immich), and
-  `Photos.sqlite` is the most schema-churned database in this space. Message
-  attachments already surface media as `FileRef`s without it. Revisiting this is
-  an Operator decision, not a milestone.
+- **voicemail** — **DE-PRIORITIZED (Operator, 2026-07-20):** the Operator's device
+  holds no voicemails to introspect or differential-validate against, so it could
+  only ever reach `observed`/`fixture-only` here, never `validated`. Not scheduled;
+  a contributor with real visual-voicemail data could carry it (metadata DB + audio
+  `FileRef`s — small, and it fits the boundary).
+- **whatsapp** — **DE-SCOPED (Operator, 2026-07-20):** modern WhatsApp encrypts its
+  own local data, which puts `ChatStorage.sqlite` **outside this library's boundary
+  by definition** — the parser reads *already-decrypted* domain databases, and
+  app-level encryption is a WhatsApp-specific *decryption* problem (a different
+  project), not a parsing one. (iMazing can't do it either; adversarial schema churn
+  on top.) Removed from the planned backlog; only becomes viable if someone first
+  solves WhatsApp decryption upstream.
+- **photos** — **UNDER RECONSIDERATION (Operator, 2026-07-20) — as METADATA only.**
+  The original park was a *quince-viewer* decision (icloudpd + Immich render the
+  Operator's photos, so quince won't). But the standalone library's job here is
+  different: parse `Photos.sqlite` into typed **metadata records** — asset filename,
+  capture date, geolocation, album membership, favorite/hidden — with a `FileRef` to
+  the media file, exactly like message attachments. **No thumbnails, no rendering**
+  (that stays out — the README "no photos libraries" line means no *rendering*).
+  Feasibility: it's the ONE remaining domain that both fits the decrypted-input
+  boundary (Photos.sqlite is a normal iOS DB, not app-encrypted) AND has real data to
+  validate against. Caveats: it is the **largest and most schema-churned** iOS DB
+  (huge CoreData `ZASSET` model) — a serious spike, and the fingerprint/capability
+  model earns its keep hard here; and **quince won't consume it**, so building it is
+  standalone-library ambition, not consumer-driven. Pending an explicit Operator go.
 
 ## Where work runs (read this BEFORE your first command)
 
