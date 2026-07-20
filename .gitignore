@@ -1,5 +1,7 @@
 # Operator-local material never enters this public repo
 local/
+# Differential / study scratch — outputs of operator-local runs, never committed
+.difftmp/
 # macOS noise
 .DS_Store
 ._*

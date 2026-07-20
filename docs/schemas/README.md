@@ -22,6 +22,15 @@ study backup = one iOS line). The doc layout is per-fingerprint so a later-obser
 version **appends** a section rather than forcing a rewrite. Fingerprints for
 versions we have not observed are never invented.
 
+**Matcher semantics (settled at M1).** In code, a fingerprint matches when its
+*required* tables/columns are all present in the introspected database; extra,
+unknown columns never disqualify (new iOS releases add columns constantly), and
+each absent *optional unit* lands its field name in `Capability.Missing` instead
+of failing. The full observed structure documented here is the fingerprint's
+identity and evidence; the requirement set is the operational test derived from
+it. A database missing a *required* piece is a different (possibly unsupported)
+fingerprint — never a silent degradation.
+
 **Observed baseline (all five domains):** the study device is on the **iOS 18.x**
 line — inferred from schema features (e.g. `message.is_pending_satellite_send` /
 `needs_relay` / RCS service; key-transparency and custom-emoji-tapback columns; Notes

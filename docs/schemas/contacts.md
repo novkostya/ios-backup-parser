@@ -3,7 +3,19 @@
 - **Backup location:** `HomeDomain` / `Library/AddressBook/AddressBook.sqlitedb`
   (sibling `AddressBookImages.sqlitedb` holds contact photos — out of scope).
 - **Storage idiom:** plain app SQLite (no CoreData).
-- **Fingerprint:** `contacts.1` — status **observed** (iOS 18.x baseline).
+- **Fingerprint:** `contacts.1` — status **validated** (2026-07-20): the M1
+  operator-local differential vs iLEAPP passed on the study backup — record
+  counts matched exactly and every compared field agreed record-by-record, in
+  two phases: (1) black-box (iLEAPP executed as a tool, its Address Book TSV
+  compared on the fields its export carries) and (2) oracle-logic (iLEAPP's
+  addressBook query semantics re-run against a scratch copy, keyed by
+  `ABPerson.ROWID`, covering all parser fields incl. last name, organization,
+  addresses, groups, store, created/modified). Phase 2 exists because iLEAPP
+  v2026.1.0's export drops some non-empty columns (its empty-column-removal
+  count query is offset by one — Last Name/Company vanish when Suffix/
+  Organization counts are zero); an upstream-reportable quirk, not a data
+  problem. The rung-4 iMazing rendering spot-check (Operator-manual) remains a
+  recommended extra, not a blocker. Observed base: iOS 18.x study backup.
 - **WAL:** the file header declares `wal`, but no `-wal`/`-shm` sidecar was present in
   the study backup (checkpointed at capture). See [README](README.md) for the
   copy-to-scratch rule; a capture-time uncommitted WAL, if it ever appears, must be
@@ -39,10 +51,21 @@ ABPerson.StoreID → ABStore.ROWID → ABStore.AccountID → ABAccount.ROWID
 ABGroup (ROWID) ◀─ ABGroupMembers.group_id ; ABGroupMembers.member_id → ABPerson.ROWID
 ```
 
-\* `property` is an integer AB constant (interpretation, to validate differentially):
-classically 3=phone, 4=email, 5=address, 22=URL, 13=birthday-ish, etc. Address and
-similar composite kinds fan out into `ABMultiValueEntry`; scalar kinds carry their
-value directly in `ABMultiValue.value`.
+\* `property` is an integer AB constant (cross-referenced from iLEAPP's
+`addressBook.py` artifact, MIT — see `NOTICE`; validated differentially at M1):
+3=phone, 4=email, 5=address, 13=instant message, 22=URL, 23=related names,
+46=profiles. (M0's "13=birthday-ish" guess was wrong — 13 is IM.) Address and
+similar composite kinds fan out into `ABMultiValueEntry` and carry a NULL
+`value`; scalar kinds carry their value directly in `ABMultiValue.value`.
+
+`ABMultiValueLabel` and `ABMultiValueEntryKey` are single-column (`value TEXT`)
+tables keyed by their **implicit SQLite rowid** — `ABMultiValue.label` and
+`ABMultiValueEntry.key` reference rowids no declared column exposes. Built-in
+labels use the wrapper form `_$!<Home>!$_`; user-defined labels are plain text.
+
+Store/account detail (introspected at M1): `ABStore(ROWID, Name, Type,
+AccountID DEFAULT -1, …)` → `ABAccount(ROWID, AccountIdentifier, …)`; a store
+with `AccountID = -1` is local (no account row).
 
 ## Key `ABPerson` columns
 

@@ -16,6 +16,14 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   milestones translate any iLEAPP parsing logic into Go, that code is additionally
   attributed inline at the call site.
 
+  M1 (contacts) additionally cross-referenced scripts/artifacts/addressBook.py
+  for the ABMultiValue property constants (3 phone / 4 email / 5 address /
+  13 instant message / 22 URL / 23 related names / 46 profiles) and the
+  "_$!<Label>!$_" built-in label wrapper (attributed inline in
+  contacts/schema.go and contacts/label.go). iLEAPP is also the differential
+  oracle for contacts (testing ladder rung 3), run as an installed tool in its
+  own container.
+
 imessage-exporter (GPL) is used ONLY as a black-box differential oracle — executed
 and compared against, never read or ported. No GPL-licensed code is incorporated
 into this repository.

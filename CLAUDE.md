@@ -34,19 +34,24 @@ Domain databases are SQLite, and SQLite needs **real on-disk files** (including
 `-wal`/`-shm` siblings when present). So the host supplies an accessor:
 
 ```go
-// BackupFS is how the library reads a backup's files. Hosts back it with a
-// decrypted directory tree, a vault's session scratch, or anything else.
-type BackupFS interface {
+// backup.FS is how the library reads a backup's files (the "BackupFS"
+// contract). Hosts back it with a decrypted directory tree, a vault's
+// session scratch, or anything else.
+type FS interface {
     // Materialize guarantees a real filesystem path for domain/relativePath,
-    // including sidecar files (-wal/-shm) when they exist in the backup.
+    // including sidecar files (-wal/-shm/-journal) when they exist in the backup.
     Materialize(domain, relativePath string) (path string, err error)
     Exists(domain, relativePath string) (bool, error)
 }
 ```
 
-Plus a built-in convenience implementation over a reconstructed
+Plus the built-in `backup.DirFS` over a reconstructed
 `<root>/<Domain>/<relativePath>` directory tree (what extraction tools produce).
-Exact final shape is settled in M1 — this sketch is the intent, not a frozen API.
+Final shape settled at M1: the root package is `backup` (the sibling's root
+package took `iosbackup`, and `backup.BackupFS` would stutter — hosts import
+both without aliases), the interface is `backup.FS`, and hot `-journal`
+sidecars are materialized alongside `-wal`/`-shm` for the same
+mutation-safety reason (see the PROGRESS decisions log, M1).
 
 Two contract points, ruled at M0 review (2026-07-20):
 
@@ -74,7 +79,9 @@ Two contract points, ruled at M0 review (2026-07-20):
   iterator exists. Mid-stream, a **row-scoped** defect yields `(zero, err)` and the
   stream continues (one corrupt row must not hide a hundred thousand good ones); a
   **stream-scoped** failure (the DB itself stops reading) terminates iteration with
-  the error. The two are never conflated.
+  the error. The two are never conflated. (M1 concretes: row-scoped =
+  `*backup.RowError`, anything else ends the stream; a stream whose data the
+  schema cannot provide yields `backup.ErrUnavailable` rather than reading empty.)
 - **Attachment/media references are structured** (ruled 2026-07-20): a
   `FileRef{Domain, RelativePath string}` that round-trips into
   `BackupFS.Materialize` — never a bare path string that lost its domain.

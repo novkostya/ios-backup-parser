@@ -20,6 +20,39 @@ data structures and iterators you can build on.
 - **Schema-aware** — iOS database schemas drift between versions; support is
   detected by introspection, never assumed from a version string.
 
+## Use
+
+```go
+import (
+    backup "github.com/novkostya/ios-backup-parser"
+    "github.com/novkostya/ios-backup-parser/contacts"
+)
+
+// A decrypted backup, laid out as <root>/<Domain>/<relativePath>.
+fsys, err := backup.NewDirFS(root)
+defer fsys.Close() // removes the private scratch copies
+
+c, err := contacts.Open(fsys) // eager: unsupported schemas fail HERE
+defer c.Close()
+
+fmt.Println(c.Capability()) // {contacts true contacts.1 [photo]}
+for person, err := range c.People() {
+    var rowErr *backup.RowError
+    switch {
+    case err == nil:
+        fmt.Println(person.First, person.Last, person.Phones)
+    case errors.As(err, &rowErr):
+        // one defective row; the stream continues
+    default:
+        return err // stream-scoped: the database stopped reading
+    }
+}
+```
+
+The original backup is never opened by SQLite: `Materialize` hands the parser a
+private, mutation-safe copy (including `-wal`/`-shm`/`-journal` sidecars), so a
+live WAL can never be replayed into your only copy of a backup.
+
 ## What it is not
 
 - It does **not** decrypt backups. Use its sibling,

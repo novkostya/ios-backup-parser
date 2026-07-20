@@ -1,0 +1,24 @@
+# golangci-lint config (v2 schema). Pinned version: versions.env (GOLANGCI_LINT_VERSION).
+# Conservative, low-friction set (mirrors ios-backup-crypt) — vet-class linters only;
+# style noise stays off. gofmt is checked separately in the gate; in v2 it is a
+# formatter, and gosimple is folded into staticcheck.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+  settings:
+    misspell:
+      locale: US
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
