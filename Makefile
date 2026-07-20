@@ -76,8 +76,8 @@ tidy: tc-go ## Run `go mod tidy` inside the toolchain container
 	$(GO_RUN) sh -euc 'go mod tidy'
 
 .PHONY: fixtures
-fixtures: tc-go ## Regenerate the committed synthetic fixtures (testing ladder rung 1)
-	$(GO_RUN) sh -euc 'FIXTURE_WRITE=1 go test -count=1 -run TestWriteCommittedFixture ./contacts'
+fixtures: tc-go ## Regenerate every committed synthetic fixture (testing ladder rung 1)
+	$(GO_RUN) sh -euc 'FIXTURE_WRITE=1 go test -count=1 -run TestWriteCommittedFixture ./...'
 
 # ---------------------------------------------------------------------------
 # OPERATOR-LOCAL study targets (testing ladder rung 3). NEVER in CI: they read the
@@ -128,6 +128,32 @@ diff-study: dump-study tc-ileapp ## Operator-local differential: parser vs iLEAP
 	    python /opt/iLEAPP/ileapp.py -t fs -i "$${stage%%/private/var/*}" -o /src/.difftmp/ileapp'
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_contacts.py /src/.difftmp \
 	    --db /study/HomeDomain/Library/AddressBook/AddressBook.sqlitedb
+
+.PHONY: dump-study-calls
+dump-study-calls: tc-go ## Operator-local: stream calls from the study tree to .difftmp/parser-calls.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain calls > .difftmp/parser-calls.jsonl && \
+	    wc -l .difftmp/parser-calls.jsonl'
+
+# Same input-type caveat as diff-study (see above): iLEAPP's callHistory artifact
+# globs `*/mobile/Library/CallHistoryDB/CallHistory*`, so an fs-mode run over the
+# backup-domain tree needs the DBs staged into a /private/var/mobile/… shim.
+# iLEAPP merges CallHistory.storedata with CallHistoryTemp.storedata; the parser
+# reads only the canonical store, so diff_calls.py treats iLEAPP-only records as
+# the expected temp-DB delta (phase 2's ROWID cross-check is the exact gate).
+.PHONY: diff-study-calls
+diff-study-calls: dump-study-calls tc-ileapp ## Operator-local differential: parser vs iLEAPP calls, record-by-record
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) sh -euc '\
+	    rm -rf /src/.difftmp/ileapp-calls && mkdir -p /src/.difftmp/ileapp-calls && \
+	    stage=$$(mktemp -d)/private/var/mobile/Library/CallHistoryDB && mkdir -p "$$stage" && \
+	    cp /study/HomeDomain/Library/CallHistoryDB/CallHistory*.storedata* "$$stage"/ && \
+	    python /opt/iLEAPP/ileapp.py -t fs -i "$${stage%%/private/var/*}" -o /src/.difftmp/ileapp-calls'
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_calls.py /src/.difftmp \
+	    --db /study/HomeDomain/Library/CallHistoryDB/CallHistory.storedata
 
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images

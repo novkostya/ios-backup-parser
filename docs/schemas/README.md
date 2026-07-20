@@ -50,7 +50,9 @@ carries a status:
   real backup for this fingerprint. The differential is a required manual gate, not a
   nicety.
 
-M0 leaves all five at **`observed`**.
+M0 left all five at **`observed`**. Since then: **`contacts.1` → validated** (M1)
+and **`calls.1` → validated** (M2), each by an operator-local differential vs
+iLEAPP. The remaining three are still `observed` (no parser yet).
 
 ## Storage idioms
 
@@ -111,15 +113,19 @@ the `Capability` shape is proposed.
 Interpretations were cross-referenced against **iLEAPP** (MIT; reading/translating
 its parsing logic is permitted **with attribution** — see `NOTICE`), primarily its
 `sms.py` for the messages domain (timestamp conversion, `attributedBody`/typedstream
-handling, join topology, attachment-path handling). **imessage-exporter** (GPL) was
-**not** consulted — it is a black-box oracle only, reserved for M3 differential runs.
+handling, join topology, attachment-path handling). Per-domain parsers cross-reference
+the matching artifact as they land: `addressBook.py` (M1, contacts) and
+`callHistory.py` (M2, calls — the `ZCALLTYPE`/`ZORIGINATED` enums), each attributed
+in `NOTICE` and inline. iLEAPP is also the differential oracle for those domains.
+**imessage-exporter** (GPL) was **not** consulted — it is a black-box oracle only,
+reserved for M3 differential runs.
 
 ## The domains
 
-| Doc | Domain file | Idiom |
-|---|---|---|
-| [contacts.md](contacts.md) | `HomeDomain/Library/AddressBook/AddressBook.sqlitedb` | plain |
-| [calls.md](calls.md) | `HomeDomain/Library/CallHistoryDB/CallHistory.storedata` | CoreData |
-| [messages.md](messages.md) | `HomeDomain/Library/SMS/sms.db` | plain + typedstream |
-| [calendar.md](calendar.md) | `HomeDomain/Library/Calendar/Calendar.sqlitedb` | plain |
-| [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf |
+| Doc | Domain file | Idiom | Fingerprint status |
+|---|---|---|---|
+| [contacts.md](contacts.md) | `HomeDomain/Library/AddressBook/AddressBook.sqlitedb` | plain | `contacts.1` validated |
+| [calls.md](calls.md) | `HomeDomain/Library/CallHistoryDB/CallHistory.storedata` | CoreData | `calls.1` validated |
+| [messages.md](messages.md) | `HomeDomain/Library/SMS/sms.db` | plain + typedstream | `messages.1` observed |
+| [calendar.md](calendar.md) | `HomeDomain/Library/Calendar/Calendar.sqlitedb` | plain | `calendar.1` observed |
+| [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` observed |

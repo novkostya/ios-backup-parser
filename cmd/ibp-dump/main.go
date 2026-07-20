@@ -12,20 +12,22 @@ import (
 	"os"
 
 	backup "github.com/novkostya/ios-backup-parser"
+	"github.com/novkostya/ios-backup-parser/calls"
 	"github.com/novkostya/ios-backup-parser/contacts"
 )
 
 type line struct {
-	Type       string             `json:"type"` // capability | person | group | row_error | note
+	Type       string             `json:"type"` // capability | person | group | call | row_error | note
 	Capability *backup.Capability `json:"capability,omitempty"`
 	Person     *contacts.Person   `json:"person,omitempty"`
 	Group      *contacts.Group    `json:"group,omitempty"`
+	Call       *calls.Call        `json:"call,omitempty"`
 	Error      string             `json:"error,omitempty"`
 }
 
 func main() {
 	root := flag.String("root", "", "path to a decrypted <Domain>/<relativePath> backup tree")
-	domain := flag.String("domain", "contacts", "domain to dump (M1: contacts only)")
+	domain := flag.String("domain", "contacts", "domain to dump (M2: contacts, calls)")
 	flag.Parse()
 	if *root == "" {
 		flag.Usage()
@@ -38,21 +40,30 @@ func main() {
 }
 
 func run(root, domain string) error {
-	if domain != "contacts" {
-		return fmt.Errorf("unknown domain %q", domain)
-	}
 	fsys, err := backup.NewDirFS(root)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = fsys.Close() }()
+
+	enc := json.NewEncoder(os.Stdout)
+	switch domain {
+	case "contacts":
+		return dumpContacts(fsys, enc)
+	case "calls":
+		return dumpCalls(fsys, enc)
+	default:
+		return fmt.Errorf("unknown domain %q", domain)
+	}
+}
+
+func dumpContacts(fsys backup.FS, enc *json.Encoder) error {
 	c, err := contacts.Open(fsys)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = c.Close() }()
 
-	enc := json.NewEncoder(os.Stdout)
 	capability := c.Capability()
 	if err := enc.Encode(line{Type: "capability", Capability: &capability}); err != nil {
 		return err
@@ -79,6 +90,34 @@ func run(root, domain string) error {
 			}
 		case errors.Is(err, backup.ErrUnavailable):
 			if err := enc.Encode(line{Type: "note", Error: err.Error()}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func dumpCalls(fsys backup.FS, enc *json.Encoder) error {
+	c, err := calls.Open(fsys)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+
+	capability := c.Capability()
+	if err := enc.Encode(line{Type: "capability", Capability: &capability}); err != nil {
+		return err
+	}
+	for call, err := range c.Calls() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "call", Call: &call}); err != nil {
 				return err
 			}
 		case isRowError(err):

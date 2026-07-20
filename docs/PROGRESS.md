@@ -11,7 +11,7 @@ infrastructure lives outside this repo.
 | --- | --- | --- |
 | **M0** | Schema spike — document the real schemas of the five domains (docs-only) | **Complete** — five domain docs committed; fingerprints `observed` |
 | **M1** | Core + `contacts` — `BackupFS`, introspection helpers, capability report | **Complete** — `backup` + `contacts` packages, gates green, differential passed; `contacts.1` **validated** |
-| M2 | `calls` (`CallHistory.storedata`) | Pending |
+| **M2** | `calls` (`CallHistory.storedata`) | **Complete** — `calls` package (first CoreData domain), gates green, differential passed; `calls.1` **validated** |
 | M3 | `messages` — chats / messages / attachments join, typedstream text | Pending |
 | M4 | `calendar` (`Calendar.sqlitedb`) | Pending |
 | M5 | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | Pending |
@@ -98,6 +98,47 @@ and the operator-local differential.
 - Toolchain scaffolding per house pattern: `versions.env` (all pins looked up
   live 2026-07-20), `deploy/Dockerfile` (Go gate stage + iLEAPP oracle stage),
   Makefile gate/fixture/study targets, `.golangci.yml` mirroring the sibling.
+
+## M2 — call history (complete)
+
+**Goal.** The `calls` domain (`CallHistory.storedata`) — the first **CoreData**
+domain, proving the Z-table / `Z_PK` / entity-indirection strategy the later
+CoreData domain (notes) inherits — with the same shape as M1: streaming
+iterator, eager validation, capability degradation, fixtures, gates, and the
+operator-local differential.
+
+**Delivered.**
+
+- **`calls`** domain: `Open` (eager validation), `Calls()` as `iter.Seq2`, the
+  `Call`/`Handle` types, and multi-party participant resolution through the
+  CoreData many-to-many join (`Z_2REMOTEPARTICIPANTHANDLES` → `ZHANDLE`).
+  `Time`/`Duration` from Cocoa **seconds** (`cocoa.FromSecondsFloat`, REAL
+  `ZDATE`) and elapsed-seconds `ZDURATION`; `Missed()` derived from
+  direction + answered. A dangling participant-handle reference is a row-scoped
+  defect: the call is withheld as a `*backup.RowError` and the stream continues.
+- **Schema re-confirmed before coding.** A read-only introspection of a scratch
+  copy of the real store (originals never opened) pinned the exact CoreData
+  names and caught two would-be *wrong-but-plausible* bugs that M0's doc had
+  guessed: `ZJUNKIDENTIFICATIONCATEGORY` is **VARCHAR**, not INTEGER (→
+  `Call.JunkCategory string`); and the FaceTime `ZCALLTYPE` ordering is **8 =
+  video, 16 = audio**, the reverse of M0's "8/16 audio/video" guess (per iLEAPP
+  `callHistory.py`).
+- Testing ladder rungs 1–3: builder-generated synthetic CoreData fixture
+  (committed, `make fixtures` regenerates all packages), round-trip +
+  committed-fixture + degraded-schema + unsupported-schema + row/stream
+  error-scoping + `Missed()` tests; containerized gates (gofmt / vet /
+  golangci-lint / `go test -race`) green on the project dev CT. Coverage:
+  `calls` 83.0% (`backup` 81.8%, `contacts` 80.4%, `internal/cocoa` 100%,
+  `internal/introspect` 90.7%; debug CLI `cmd/ibp-dump` untested by design).
+- **Differential vs iLEAPP passed (2026-07-20)** on the operator-local study
+  backup → `calls.1` is **validated**. Two phases both clean: black-box (parser
+  stream vs iLEAPP's Call History export) and oracle-logic (parser vs the
+  store's own SQL, keyed by `ZCALLRECORD.Z_PK`, every surfaced field including
+  participants). Zero row errors; the observed schema carries every optional
+  unit (empty `Capability.Missing`).
+- `cmd/ibp-dump` gained `-domain calls`; `deploy/diff_calls.py` +
+  `dump-study-calls` / `diff-study-calls` Makefile targets added; `NOTICE` and
+  `docs/schemas/calls.md` updated in the same change.
 
 ## Decisions log
 
@@ -210,3 +251,46 @@ restated in full.
   (modernc.org/sqlite requirement), matching the sibling.
 - **M1 — coverage declaration adopted** (quince-program house style): per-package
   `go test -cover` summaries recorded in the milestone entry from this milestone on.
+- **M2 — CoreData strategy (first CoreData domain).** Entities live in per-entity
+  `Z`-tables; `Z_PK` is a real declared column (`INTEGER PRIMARY KEY`), so it is a
+  required column by name (unlike AddressBook's implicit `ROWID`, which the matcher
+  special-cases). No `Z_ENT` filtering is needed for `ZCALLRECORD` (each entity has
+  its own table — not the single-table inheritance notes will use). This is the join/
+  PK/epoch template M5 (notes) inherits.
+- **M2 — the participant join is an Optional unit keyed on exact CoreData names.**
+  CoreData's many-to-many join table name and columns embed the entities' `Z_ENT`
+  ordinals (`Z_2REMOTEPARTICIPANTHANDLES`: 2 = CallRecord, 4 = Handle). Those
+  ordinals are a per-model fact; a future model that renumbers is a *different*
+  fingerprint (`calls.2`), not a silent degradation — so the join is Optional
+  (`participants` in `Missing[]`) matched on the exact observed names, never inferred.
+- **M2 — schema re-confirmed by introspection before coding; two M0 guesses
+  corrected.** Read-only introspection of a scratch copy pinned the real names and
+  types, catching bugs the honesty rules exist to prevent: (a)
+  `ZJUNKIDENTIFICATIONCATEGORY` is **VARCHAR** (→ `JunkCategory string`), not the
+  INTEGER M0 implied by lumping it with `ZJUNKCONFIDENCE`; (b) FaceTime `ZCALLTYPE`
+  is **8 = video / 16 = audio**, the reverse of M0's guessed ordering. Both
+  interpretations (and `ZORIGINATED` 0/1) are cross-referenced from iLEAPP
+  `callHistory.py` (MIT, attributed) and confirmed by the passing differential. M0's
+  `calls.md` was corrected in place (structure/interpretation only, no data).
+- **M2 — canonical store only; `CallHistoryTemp.storedata` out of scope.** The parser
+  reads `CallHistory.storedata`. The temp buffer of not-yet-migrated recent calls
+  would need two-database merge and `Z_PK` namespacing across stores; deferred as a
+  forward note (additive later), not a blocker. iLEAPP merges both, so the
+  differential requires parser records ⊆ iLEAPP records and treats iLEAPP-only rows
+  as the expected temp delta; the phase-2 `Z_PK` cross-check on the canonical store is
+  the exact gate. No public API implication.
+- **M2 — no optional *stream*; degradation is field-level.** Unlike contacts
+  (`Groups()` yields `ErrUnavailable` when its tables are absent), calls has a single
+  stream (`Calls()`); optional data (participants, name, spam, …) are *fields*, so
+  their absence degrades to zero-value + `Missing[]`, exactly as contacts' optional
+  scalar columns do. `ErrUnavailable` remains reserved for a whole unavailable stream
+  — none exists in calls. The ruled `Capability` four-field shape is unchanged.
+- **M2 — `Duration` as `time.Duration` from `FLOAT` seconds; differential tolerance.**
+  `Call.Duration` keeps the full fractional `ZDURATION`. iLEAPP renders duration via
+  `strftime('%H:%M:%S', …)`, which is second-granular and subject to Julian-day float
+  rounding (±1s), so `diff_calls.py` phase 1 floors and tolerates ±1s; phase 2 checks
+  duration exactly against the raw `ZDURATION`. The parser value is the precise one.
+- **M2 — pins.** No new module dependencies (calls uses only stdlib + the M1 internal
+  packages); `go.mod`/`go.sum` unchanged. Same toolchain + iLEAPP oracle pins as M1
+  (`callHistory.py` ships in the same iLEAPP v2026.1.0 image). `make fixtures` now
+  regenerates every package's committed fixture (`./...`).

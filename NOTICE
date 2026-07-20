@@ -24,6 +24,12 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   oracle for contacts (testing ladder rung 3), run as an installed tool in its
   own container.
 
+  M2 (calls) additionally cross-referenced scripts/artifacts/callHistory.py for
+  the ZCALLRECORD interpretations: ZCALLTYPE (0 third-party app / 1 phone /
+  8 FaceTime video / 16 FaceTime audio), ZORIGINATED (0 incoming / 1 outgoing)
+  and ZANSWERED (0/1) — attributed inline in calls/types.go and
+  deploy/diff_calls.py. iLEAPP is also the differential oracle for calls.
+
 imessage-exporter (GPL) is used ONLY as a black-box differential oracle — executed
 and compared against, never read or ported. No GPL-licensed code is incorporated
 into this repository.
