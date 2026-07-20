@@ -1,0 +1,22 @@
+name: gates
+
+# CI calls only the Makefile targets — no logic in YAML (see the Makefile
+# header). `make gates` autodetects the container runtime (docker on the
+# runner), builds the pinned toolchain image from deploy/Dockerfile, and runs
+# gofmt -l / go vet / golangci-lint / go test -race inside it, so CI and the
+# dev host compile with identical toolchains.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      # checkout v7 runs on node24 — avoids the deprecated-Node warnings of
+      # older majors. Pin looked up live at add time (charter "pins are looked
+      # up" rule), newest stable with runway.
+      - uses: actions/checkout@v7
+      - run: make gates

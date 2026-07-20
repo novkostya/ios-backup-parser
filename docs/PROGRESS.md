@@ -294,3 +294,9 @@ restated in full.
   packages); `go.mod`/`go.sum` unchanged. Same toolchain + iLEAPP oracle pins as M1
   (`callHistory.py` ships in the same iLEAPP v2026.1.0 image). `make fixtures` now
   regenerates every package's committed fixture (`./...`).
+- **CI — GitHub Actions added (2026-07-20).** `.github/workflows/gates.yml`: on
+  push-to-`main` and pull requests, a single `make gates` step on `ubuntu-latest` —
+  the Makefile's "CI calls only these targets, no logic in YAML", so CI and the dev
+  host compile in the identical pinned toolchain container (docker autodetected on the
+  runner). `actions/checkout` pinned to **v7** (node24 runtime) — looked up live per
+  the pins rule; older majors emit deprecated-Node warnings.
