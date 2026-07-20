@@ -223,6 +223,12 @@ contributor must never mistake green CI for correctness.
   no toolchains on its rootfs either — every gate runs inside a pinned toolchain
   container (`nerdctl`/`docker`, autodetected by the Makefile). Same rules as the
   quince project's "Where work runs" (its `docs/program/quince.program.md`).
+- **This project has its own dev host — never run gates on another project's box**
+  (one project, one dev host; sharing was tried once, 2026-07-20, and the contention
+  forced an emergency second box mid-rung). Its identity and provisioning live in the
+  Operator-private environment doc's sibling section, along with the rule that the
+  privacy pattern list must be present on any box that commits (the Makefile also
+  probes `../quince-local/privacy-patterns.txt` for exactly this case).
 - **Concrete hosts, addresses, paths, and the exact workflow are Operator-private and
   live OUTSIDE this repo.** On the Operator's machines the quince checkout sits next
   to this repo (directory named `quince` or `iphone-backup-app`); read its

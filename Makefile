@@ -7,7 +7,8 @@
 # the target no-ops (contributor / CI mode).
 PRIVACY_PATTERNS ?= $(firstword $(wildcard \
 	../iphone-backup-app/local/privacy-patterns.txt \
-	../quince/local/privacy-patterns.txt))
+	../quince/local/privacy-patterns.txt \
+	../quince-local/privacy-patterns.txt))
 
 .PHONY: privacy-check
 privacy-check:
