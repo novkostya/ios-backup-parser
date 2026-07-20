@@ -227,10 +227,22 @@ contributor must never mistake green CI for correctness.
 
 ## Backlog — post-v0.1 domain candidates (Operator-acked 2026-07-20)
 
-Not scheduled; recorded so absence reads as a decision, not an oversight (parity
-review against iMazing's domain list). Every future domain enters through the M0
-pattern — schema spike first, fingerprint `observed` by introspection of a real
-backup, differential to `validated` — never by assumption.
+Recorded so absence reads as a decision, not an oversight (parity review against
+iMazing's domain list). Every future domain enters through the M0 pattern — schema
+spike first, fingerprint `observed` by introspection of a real backup, differential to
+`validated` — never by assumption. **One domain per session** (agents collide on the
+README support table, `cmd/ibp-dump`'s switch, PROGRESS, NOTICE); a domain lands, the
+next starts — the milestone-worktree rhythm. These run fine **in parallel with quince**
+(separate repo, separate dev CT) but **not in parallel with each other**.
+
+**Ordering (ruled 2026-07-20, momentum > raw size):** **Safari first** — `Bookmarks.db`
+is plain SQLite, near-certainly populated, and iLEAPP has strong coverage → a clean
+two-oracle differential that reliably reaches `validated`. **Voicemail is NOT first
+despite being smallest:** visual-voicemail storage is carrier-dependent, so the study
+backup may hold zero VVM rows — a domain that can only reach `observed`, not
+`validated`, is a poor opener. Suggested sequence: **safari → reminders → voicemail →
+whatsapp** (whatsapp last: a hostile third party churns its schema). Post-v0.1 these
+are M7+; each is its own milestone, its own CHANGELOG entry, its own fingerprint.
 
 - **safari** — bookmarks + reading list (`Bookmarks.db`, plain SQLite; the reading
   list lives inside it) and history. Spike caveat: which Safari artifacts are
