@@ -240,11 +240,12 @@ is plain SQLite, near-certainly populated, and iLEAPP has strong coverage → a 
 two-oracle differential that reliably reaches `validated`. **Voicemail is NOT first
 despite being smallest:** visual-voicemail storage is carrier-dependent, so the study
 backup may hold zero VVM rows — a domain that can only reach `observed`, not
-`validated`, is a poor opener. **Scope revised 2026-07-20 (Operator):** safari (M7) and
-reminders (M8) done. **voicemail DE-PRIORITIZED, whatsapp DE-SCOPED** (see their entries);
-**photos under active reconsideration as the one remaining feasible domain — as METADATA
-only.** Post-v0.1 domains are M7+; each is its own milestone, CHANGELOG entry, and
-fingerprint.
+`validated`, is a poor opener. **Scope settled 2026-07-20 (Operator):** safari (M7) and
+reminders (M8) done → **7 validated domains, planned scope COMPLETE; the parser now rests
+as a finished deliverable.** The rest of the backlog is unscheduled: **voicemail
+DE-PRIORITIZED, whatsapp DE-SCOPED, photos left in the BACKLOG** (all below). No domain is
+actively next; a future domain is an Operator decision or a community contribution, each
+its own milestone/CHANGELOG/fingerprint.
 
 - **safari** — bookmarks + reading list (`Bookmarks.db`, plain SQLite; the reading
   list lives inside it) and history. Spike caveat: which Safari artifacts are
@@ -266,19 +267,19 @@ fingerprint.
   project), not a parsing one. (iMazing can't do it either; adversarial schema churn
   on top.) Removed from the planned backlog; only becomes viable if someone first
   solves WhatsApp decryption upstream.
-- **photos** — **UNDER RECONSIDERATION (Operator, 2026-07-20) — as METADATA only.**
-  The original park was a *quince-viewer* decision (icloudpd + Immich render the
-  Operator's photos, so quince won't). But the standalone library's job here is
-  different: parse `Photos.sqlite` into typed **metadata records** — asset filename,
-  capture date, geolocation, album membership, favorite/hidden — with a `FileRef` to
-  the media file, exactly like message attachments. **No thumbnails, no rendering**
-  (that stays out — the README "no photos libraries" line means no *rendering*).
-  Feasibility: it's the ONE remaining domain that both fits the decrypted-input
-  boundary (Photos.sqlite is a normal iOS DB, not app-encrypted) AND has real data to
-  validate against. Caveats: it is the **largest and most schema-churned** iOS DB
-  (huge CoreData `ZASSET` model) — a serious spike, and the fingerprint/capability
-  model earns its keep hard here; and **quince won't consume it**, so building it is
-  standalone-library ambition, not consumer-driven. Pending an explicit Operator go.
+- **photos** — **BACKLOG, not scheduled (Operator ruling 2026-07-20: reconsidered,
+  left as-is).** It IS the one remaining domain that fits the boundary (`Photos.sqlite`
+  is a normal decryptable iOS DB, not app-encrypted) and has real data to validate —
+  so it's feasible, but not being built now. Two reasons it stays parked: **quince
+  won't consume it** (icloudpd + Immich cover the Operator's photos), so it's pure
+  standalone-library ambition; and it's the **largest, most schema-churned** iOS DB
+  (huge CoreData `ZASSET` model). **If it is ever built, the scope is METADATA ONLY** —
+  parse `Photos.sqlite` into typed records (asset filename, capture date, geolocation,
+  album membership, favorite/hidden) with a `FileRef` to the media file, exactly like
+  message attachments; **no thumbnails, no rendering** (the README "no photos
+  libraries" line means no *rendering* — media-as-`FileRef` is the library's model
+  everywhere). That distinction is recorded so a future decision starts from the right
+  scope, but the ruling for now is: leave it.
 
 ## Where work runs (read this BEFORE your first command)
 
