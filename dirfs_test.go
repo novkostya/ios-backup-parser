@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	backup "github.com/novkostya/ios-backup-parser"
@@ -125,6 +126,58 @@ func TestDirFSExists(t *testing.T) {
 	ok, err = fsys.Exists("MediaDomain", "Library/db.sqlite")
 	if err != nil || ok {
 		t.Errorf("Exists(absent domain) = %v, %v; want false, nil", ok, err)
+	}
+}
+
+func TestDirFSReadDir(t *testing.T) {
+	root := t.TempDir()
+	// A reminders-shaped tree: several stores in one directory, whose names a
+	// domain cannot know in advance.
+	dir := "Container_v1/Stores"
+	for _, name := range []string{"Data-22222222.sqlite", "Data-11111111.sqlite", "Data-local.sqlite"} {
+		writeFile(t, filepath.Join(root, "AppDomainGroup-group.com.apple.reminders", filepath.FromSlash(dir), name), "x")
+	}
+
+	var fsys backup.FS
+	dfs, err := backup.NewDirFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dfs.Close() }()
+	fsys = dfs
+
+	// DirFS satisfies the optional ReadDirFS capability.
+	rd, ok := fsys.(backup.ReadDirFS)
+	if !ok {
+		t.Fatal("DirFS does not implement backup.ReadDirFS")
+	}
+
+	names, err := rd.ReadDir("AppDomainGroup-group.com.apple.reminders", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// os.ReadDir sorts, so the result is deterministic.
+	want := []string{"Data-11111111.sqlite", "Data-22222222.sqlite", "Data-local.sqlite"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("ReadDir = %v, want %v", names, want)
+	}
+
+	// An absent directory is fs.ErrNotExist, not a spurious empty listing.
+	if _, err := rd.ReadDir("AppDomainGroup-group.com.apple.reminders", "Container_v1/Nope"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ReadDir(absent) = %v, want fs.ErrNotExist", err)
+	}
+
+	// Path-escape guards apply exactly as for Materialize/Exists.
+	for _, tc := range []struct{ domain, dir string }{
+		{"", "Stores"},
+		{"..", "Stores"},
+		{"AppDomainGroup-group.com.apple.reminders", ""},
+		{"AppDomainGroup-group.com.apple.reminders", "../.."},
+		{"AppDomainGroup-group.com.apple.reminders", "/etc"},
+	} {
+		if _, err := rd.ReadDir(tc.domain, tc.dir); err == nil {
+			t.Errorf("ReadDir(%q, %q) accepted an escaping path", tc.domain, tc.dir)
+		}
 	}
 }
 

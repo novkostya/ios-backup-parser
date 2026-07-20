@@ -8,6 +8,24 @@ so minor releases may make breaking API changes until v1.0.0.
 
 ### Added
 
+- `backup.ReadDirFS` — an **optional** FS capability (a host may implement it;
+  the base `backup.FS` is unchanged) for listing a directory's entries within a
+  domain, mirroring `io/fs.ReadDirFS`. The built-in `DirFS` implements it. A domain
+  that must discover files whose names it cannot know in advance uses it; today only
+  `reminders` (its per-account stores are UUID-named). Listing is read-only.
+- `reminders` — the Reminders domain (`reminders.1`), the second post-v0.1 domain.
+  Streams `Reminders()` (title/notes, completion, flag, priority, all-day, due/start/
+  created/modified dates, list, account, subtask parent, and — surfaced raw —
+  recurrence and assignee) and `Lists()`. CoreData with mixed inheritance: reminders
+  in `ZREMCDREMINDER`, lists in `ZREMCDBASELIST`, accounts/recurrence/assignments/
+  sharees sharing `ZREMCDOBJECT` (Z_ENT ordinals resolved per store from
+  `Z_PRIMARYKEY`, never hard-coded). The domain **spans multiple stores**
+  (`Container_v1/Stores/Data-*.sqlite`, one per account); each reminder's identity is
+  (`Store`, `ID`). Enumerating the UUID-named stores uses `backup.ReadDirFS`; a host
+  lacking it reads only the fixed `Data-local.sqlite` and reports `cloudkit_stores`
+  in `Missing`. Titles/notes are plain columns (no blob decode); timestamps are Cocoa
+  seconds. Validated record-by-record against each store's own SQL (iLEAPP's reminders
+  export is stale on the iOS-18 schema — see NOTICE).
 - `safari` — bookmarks, the reading list, and browsing history over Safari's
   `Bookmarks.db` and `History.db` (`safari.1`), the first post-v0.1 domain. Three
   streams from one `Reader`: `Bookmarks()` (the self-referential bookmark tree),

@@ -1,5 +1,8 @@
-# Operator-local material never enters this public repo
-local/
+# Operator-local material never enters this public repo.
+# No trailing slash: must also match the `local` SYMLINK (a repo/worktree init step) —
+# a trailing slash matches directories only, which is how the symlink slipped past the
+# gate at M8 (the same bug fixed on the quince side).
+local
 # Differential / study scratch — outputs of operator-local runs, never committed
 .difftmp/
 # macOS noise

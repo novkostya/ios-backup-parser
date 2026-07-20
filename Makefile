@@ -290,6 +290,35 @@ diff-study-safari: dump-study-safari tc-ileapp ## Operator-local differential: p
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_safari.py /src/.difftmp \
 	    --db /study/HomeDomain/Library/Safari/Bookmarks.db --history-db /study/HomeDomain/Library/Safari/History.db
 
+REMINDERS_STORES := AppDomainGroup-group.com.apple.reminders/Container_v1/Stores
+
+.PHONY: dump-study-reminders
+dump-study-reminders: tc-go ## Operator-local: stream reminders from the study tree to .difftmp/parser-reminders.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain reminders > .difftmp/parser-reminders.jsonl && \
+	    wc -l .difftmp/parser-reminders.jsonl'
+
+# REMINDERS DIFFERENTIAL — split-oracle, like notes, and for the same reason.
+# iLEAPP's reminders.py queries `FROM ZREMCDOBJECT WHERE ZTITLE1 <> ''` and guards
+# on does_column_exist_in_db(ZREMCDOBJECT, ZLASTMODIFIEDDATE); on the iOS 17/18
+# schema reminders live in ZREMCDREMINDER (title ZTITLE) and ZREMCDOBJECT has no
+# ZLASTMODIFIEDDATE, so the guard is false and iLEAPP returns ZERO reminders — the
+# same notes-class staleness. Running the artifact here would yield an empty,
+# useless export, so the oracle is diff_reminders.py's OWN SQL against a scratch
+# copy of every store (the reminders domain spans MANY stores: Data-<UUID>.sqlite
+# per account + Data-local.sqlite), keyed by (store, ZREMCDREMINDER.Z_PK) with the
+# both-directions set check. iLEAPP is still credited (MIT, NOTICE) for the store
+# glob and the Cocoa `+978307200` epoch, which diff_reminders.py reuses. The parser
+# opens scratch copies (BackupFS.Materialize); the harness copies each store too.
+.PHONY: diff-study-reminders
+diff-study-reminders: dump-study-reminders tc-ileapp ## Operator-local differential: parser vs each store's own SQL, reminder-by-reminder
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_reminders.py /src/.difftmp \
+	    --stores "/study/$(REMINDERS_STORES)"
+
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images
 	-$(RUNTIME) run --rm -v $(ROOT):/src $(ALPINE_IMAGE) rm -rf /src/.difftmp

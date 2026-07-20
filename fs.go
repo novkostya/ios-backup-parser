@@ -19,6 +19,32 @@ type FS interface {
 	Exists(domain, relativePath string) (bool, error)
 }
 
+// ReadDirFS is an OPTIONAL FS capability: listing the entries of a directory
+// within a domain. The base FS deliberately exposes only file access
+// (Materialize/Exists) because almost every domain reads files whose relative
+// paths are fixed and known ahead of time. A domain that instead must DISCOVER
+// files whose names it cannot know in advance type-asserts for this — today
+// only reminders, whose per-account CloudKit stores live at
+// Container_v1/Stores/Data-<UUID>.sqlite with a UUID assigned at store-creation
+// time and recorded in no manifest (the fixed-name Data-local.sqlite is only
+// the on-device account's store).
+//
+// It mirrors io/fs.ReadDirFS: a host MAY implement it (the built-in DirFS
+// does), and a host that does not is served best-effort — the domain reports
+// the shortfall through its capability report rather than by failing. Listing
+// is READ-ONLY: it reports names, never materializes or opens anything, so the
+// never-mutate-input rule is not engaged (only Materialize ever copies).
+type ReadDirFS interface {
+	FS
+
+	// ReadDir returns the names — the final path element only, not full
+	// paths — of the entries directly inside domain/relativeDir, or an error
+	// wrapping fs.ErrNotExist when that directory is absent. Join a returned
+	// name onto relativeDir to form a relative path for Materialize/Exists.
+	// The order is unspecified; callers that need determinism sort.
+	ReadDir(domain, relativeDir string) (names []string, err error)
+}
+
 // FileRef is a structured reference to a file inside the backup — an
 // attachment, a media file, a sibling database. It round-trips into
 // FS.Materialize; records never carry a bare path string that lost its

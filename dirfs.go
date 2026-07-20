@@ -77,6 +77,28 @@ func (d *DirFS) Exists(domain, relativePath string) (bool, error) {
 	return true, nil
 }
 
+// ReadDir implements ReadDirFS: it lists the entry names directly inside
+// domain/relativeDir in the ORIGINAL tree. Listing is read-only — it never
+// copies, opens, or mutates anything (only Materialize copies), so it is safe
+// against a read-only backup tree. A missing directory surfaces as
+// fs.ErrNotExist (wrapped). Names are returned sorted (os.ReadDir sorts), so
+// callers get a deterministic order.
+func (d *DirFS) ReadDir(domain, relativeDir string) ([]string, error) {
+	src, err := d.source(domain, relativeDir)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return nil, fmt.Errorf("backup: read dir %s/%s: %w", domain, relativeDir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
 // Materialize implements FS: it copies domain/relativePath — and any
 // -wal/-shm/-journal sidecars present — into a private scratch directory and
 // returns the copied file's path. Each call materializes a fresh copy.

@@ -1,8 +1,8 @@
 # Domain schemas — observed reference
 
 Per-domain schema documentation for the five M0 domains plus the post-v0.1 additions
-(safari, M7), from **direct introspection of a real decrypted backup**. These docs are
-the ground truth the parsers are written against.
+(safari, M7; reminders, M8), from **direct introspection of a real decrypted backup**.
+These docs are the ground truth the parsers are written against.
 
 **Scrubbed by construction.** Structure only — table names, columns, joins, types,
 timestamp epochs, storage idioms. Never row data, never counts, date ranges, names,
@@ -52,12 +52,17 @@ carries a status:
 
 M0 left the five spike domains at **`observed`**; all are now **`validated`** by an
 operator-local differential — **`contacts.1`** (M1), **`calls.1`** (M2),
-**`messages.1`** (M3), **`calendar.1`** (M4) and **`notes.1`** (M5) — as is the first
-post-v0.1 domain, **`safari.1`** (M7: bookmarks, reading list and history). Five used
-iLEAPP directly as the oracle (safari via its Bookmarks and History exports, keyed by
-`bookmarks.id` and `history_visits.id`); notes used iLEAPP's own (MIT) note-body
-decoder plus the store's SQL and Apple's stored snippet, because iLEAPP's notes export
-returns zero rows on the iOS-18 schema (see [notes.md](notes.md) → Validation).
+**`messages.1`** (M3), **`calendar.1`** (M4) and **`notes.1`** (M5) — as are the
+post-v0.1 domains **`safari.1`** (M7: bookmarks, reading list and history) and
+**`reminders.1`** (M8). Five used iLEAPP directly as the oracle (safari via its
+Bookmarks and History exports, keyed by `bookmarks.id` and `history_visits.id`); notes
+and reminders used a **split oracle**, because iLEAPP's export returns zero rows on the
+iOS-18 schema for both (notes: a stale `ZACCOUNT4` join; reminders: a stale
+`ZREMCDOBJECT.ZTITLE1` query for text that now lives in `ZREMCDREMINDER`). Notes used
+iLEAPP's own (MIT) note-body decoder plus the store's SQL and Apple's stored snippet;
+reminders used the store's own SQL (keyed by (store, `Z_PK`) across every per-account
+store) plus iLEAPP's confirmed store glob and Cocoa epoch (see [reminders.md](reminders.md)
+→ Validation).
 
 ## Storage idioms
 
@@ -67,8 +72,14 @@ strategy:
 | Idiom | Domains | Consequence for the parser |
 |---|---|---|
 | Plain app SQLite | contacts, messages, calendar, safari | Natural tables; relations by id columns / explicit FKs |
-| **CoreData** | calls, notes | `Z`-prefixed tables, `Z_PK`/`Z_ENT` indirection, `Z_PRIMARYKEY` entity map, `Z_METADATA` model version; single-table inheritance (notes) |
-| Blob-encoded payload | messages (`attributedBody`), notes (`ZICNOTEDATA.ZDATA`) | Text/content is **not** a column — it is a serialized blob (typedstream / gzip+protobuf) that must be decoded |
+| **CoreData** | calls, notes, reminders | `Z`-prefixed tables, `Z_PK`/`Z_ENT` indirection, `Z_PRIMARYKEY` entity map, `Z_METADATA` model version; single-table inheritance (notes) / mixed inheritance across a shared `ZREMCDOBJECT` (reminders) |
+| Blob-encoded payload | messages (`attributedBody`), notes (`ZICNOTEDATA.ZDATA`) | Text/content is **not** a column — it is a serialized blob (typedstream / gzip+protobuf) that must be decoded. (Reminders keep title/notes in plain columns — no decode.) |
+
+Two domains span **multiple database files**: safari (two different stores —
+`Bookmarks.db` + `History.db`) and reminders (N same-model CloudKit stores —
+`Container_v1/Stores/Data-*.sqlite`, one per account). Reminders' store filenames are
+UUIDs discoverable only by directory listing, so its enumeration uses the optional
+`backup.ReadDirFS` capability (see [reminders.md](reminders.md)).
 
 ## Timestamp epochs — the cross-domain trap
 
@@ -84,6 +95,7 @@ off by 10⁹). Every date column's epoch and unit is documented per domain; the 
 | **messages** | `message.date` | 2001-01-01 (Cocoa) | **NANOseconds** | INTEGER |
 | **safari** (bookmarks) | `bookmarks.last_modified` | **1970-01-01 (Unix)** | **seconds** | REAL |
 | safari (history) | `history_visits.visit_time` | 2001-01-01 (Cocoa) | **seconds** | REAL |
+| reminders | `ZREMCDREMINDER.ZCREATIONDATE` | 2001-01-01 (Cocoa) | **seconds** | REAL (`TIMESTAMP`) |
 
 **Cocoa 2001 everywhere EXCEPT Safari's `Bookmarks.db`, which is Unix 1970; and only
 `messages` is in nanoseconds.** Two footguns, not one. (1) The unit divergence: a shared
@@ -96,7 +108,9 @@ is off by 31 years (see [safari.md](safari.md), the two-epoch trap).
 
 Caveat (calendar): EventKit uses **negative / far-past sentinel** date values for
 floating, all-day, and birthday items, and permits far-future values; consumers must
-tolerate out-of-range values, not assume every date is "recent."
+tolerate out-of-range values, not assume every date is "recent." Reminders, by
+contrast, use a plain **NULL** for an undated reminder (no sentinel); an all-day
+reminder carries a date-only `ZDUEDATE` flagged by `ZALLDAY`.
 
 ## Capability report — validated against reality
 
@@ -135,8 +149,11 @@ plugin, MIT; the note column choices, the gzip+protobuf body encoding, and its o
 body decoder) and `safariBookmarks.py` / `safariHistory.py` (M7, safari — the
 `title`/`url`/`hidden` bookmarks read, the `history_visits` ⟕ `history_items` join, the
 `origin` and redirect id→url resolution, and the `visit_time + 978307200` Cocoa
-conversion that pinned History's epoch against Bookmarks' Unix one), each attributed in
-`NOTICE` and inline. iLEAPP is also the differential
+conversion that pinned History's epoch against Bookmarks' Unix one) and `reminders.py`
+(M8, reminders — the `Container_v1/Stores/*.sqlite*` store glob and the
+`col + 978307200` Cocoa epoch; its `ZREMCDOBJECT.ZTITLE1` query is stale on the
+iOS-18 schema, so it is a split-oracle contributor, not the differential oracle), each
+attributed in `NOTICE` and inline. iLEAPP is also the differential
 oracle for those domains — for messages its own typedstream decoder (python-typedstream)
 is the independent oracle that validated the from-scratch Go decoder, and for notes its
 own note-body decoder plays the same role (its full notes export is unusable on the
@@ -154,3 +171,4 @@ oracle only (source never read), documented as the stronger manual cross-check i
 | [calendar.md](calendar.md) | `HomeDomain/Library/Calendar/Calendar.sqlitedb` | plain | `calendar.1` validated |
 | [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` validated |
 | [safari.md](safari.md) | `HomeDomain/Library/Safari/Bookmarks.db` (+ `History.db`) | plain (two stores) | `safari.1` validated |
+| [reminders.md](reminders.md) | `AppDomainGroup-group.com.apple.reminders/Container_v1/Stores/Data-*.sqlite` | CoreData (N stores) | `reminders.1` validated |

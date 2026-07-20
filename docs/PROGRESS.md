@@ -17,6 +17,7 @@ infrastructure lives outside this repo.
 | **M5** | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | **Complete** — `notes` package + `internal/applenotes` gzip+protobuf decoder, gates green, differential passed; `notes.1` **validated** |
 | **M6** | v0.1 — docs, examples, schema-coverage table, tag | **Complete** — per-domain godoc examples, README schema-coverage table, `CHANGELOG.md`, docs finalized; M5 coverage backfilled; gates green; `v0.1.0` tagged |
 | **M7** | `safari` (`Bookmarks.db` + `History.db`) — first post-v0.1 backlog domain | **Complete** — `safari` package (bookmarks / reading list / history over two plain-SQLite stores), gates green, differential passed; `safari.1` **validated** |
+| **M8** | `reminders` (`Container_v1/Stores/Data-*.sqlite`) — second post-v0.1 backlog domain | **Complete** — `reminders` package (CoreData, mixed inheritance, multi-store) + additive `backup.ReadDirFS` capability, gates green, differential passed; `reminders.1` **validated** |
 
 ## M0 — schema spike (complete)
 
@@ -466,6 +467,93 @@ new wrinkle: the domain **spans two plain-SQLite stores** (`Bookmarks.db` +
   added; `NOTICE`, `docs/schemas/safari.md`, `docs/schemas/README.md`, `README.md` and
   `CHANGELOG.md` updated in the same change.
 
+## M8 — reminders (complete)
+
+**Goal.** The `reminders` domain — the second **post-v0.1 backlog** domain (charter
+ordering: safari → **reminders** → voicemail → whatsapp). Reminders moved to their own
+store around iOS 13 (the M0 calendar doc recorded `CalendarItem`'s reminder columns as
+present-but-unused for exactly this reason), so the first spike task was finding the
+real store — **not** `Calendar.sqlitedb`. Same house shape as M1–M7 (streaming
+iterators, eager validation, capability degradation, fixtures, gates, operator-local
+differential). Two new wrinkles: the domain is **CoreData spanning multiple store
+files**, and reading it needs a new **optional FS capability**.
+
+**Delivered.**
+
+- **`reminders`** domain: `Open` (eager `reminders.1` validation on every store),
+  `Reminders()` and `Lists()` as `iter.Seq2` from one `Reader`. The store is CoreData
+  with **mixed inheritance**: reminders in `ZREMCDREMINDER`, lists in `ZREMCDBASELIST`
+  (`REMCDList`/`REMCDSmartList`), and accounts / recurrence rules / assignments /
+  sharees as `REMCDObject` subclasses sharing the wide `ZREMCDOBJECT`. Each `Reminder`
+  carries title/notes (plain columns — **no blob decode**, unlike messages/notes),
+  completion, flag, priority, all-day, created/modified/due/start/completion dates
+  (Cocoa **seconds**, `cocoa.FromSecondsFloat`), marked-for-deletion, subtask
+  `ParentID`, its `List` and `Account` (soft-nil), and — **surfaced raw,
+  documented-to-validate** — `Recurrence` (frequency/interval/count/end via the
+  `REMCDRecurrenceRule` back-pointer `ZREMINDER4`) and `Assignee` (best-effort through
+  `REMCDAssignment` → `REMCDSharee`). `ZIDENTIFIER` is a 16-byte UUID BLOB, formatted.
+  The only row-scoped defect is a scan failure (a corrupt date) → `*backup.RowError`,
+  stream continues.
+- **Multi-store, with per-store identity.** A backup holds several stores
+  (`Container_v1/Stores/Data-<UUID>.sqlite` per account + the fixed-name
+  `Data-local.sqlite`). `Open` enumerates and opens **every** matching store; a
+  reminder's identity is **(`Store`, `Z_PK`)** — each store has its own `Z_PK`
+  sequence. A stream-scoped error in any store terminates the whole iteration; the
+  both-directions set check is keyed by (store, id).
+- **New additive core capability `backup.ReadDirFS`** (Operator-approved this session
+  — see decisions log). The base `FS` (`Materialize`+`Exists`) cannot list a
+  directory, but the reminder stores are UUID-named and recorded in no manifest.
+  `ReadDirFS` (a new *optional* interface mirroring `io/fs.ReadDirFS`; `DirFS`
+  implements it, read-only) lets the domain enumerate them. A host lacking it reads
+  only `Data-local.sqlite` and reports **`cloudkit_stores`** in `Capability.Missing` —
+  honest degradation, never a silent partial read.
+- **Z_ENT ordinals resolved per store from `Z_PRIMARYKEY`, never hard-coded** — the
+  M5 lesson, and it bit for real: the study's `Data-local.sqlite` renumbers
+  `REMCDAccount`/`REMCDRecurrenceRule`/`REMCDAssignment`/`REMCDSharee` relative to the
+  CloudKit stores (a grocery entity inserted mid-map). A hard-coded or store-shared
+  ordinal would mis-read one store. The committed fixture uses **two stores with
+  different non-standard ordinals** and a **reused `Z_PK` across stores** to prove
+  both per-store resolution and (store, id) namespacing.
+- **Schema re-confirmed by introspection before coding (the M2–M7 lesson).**
+  Read-only introspection of scratch copies (originals never opened) pinned the store
+  layout, the reminder/list/account tables and joins, the recurrence/assignment
+  back-pointers (`ZREMINDER4`/`ZREMINDER1`), the 16-byte `ZIDENTIFIER`, and — by
+  magnitude — that all six reminder date columns are Cocoa-2001 seconds (undated =
+  NULL, no floating sentinel). It also caught that iLEAPP's oracle is stale (below).
+- Testing ladder rungs 1–3: builder-generated synthetic **two-store** fixture
+  (committed; `make fixtures` regenerates) with renumbered per-store ordinals, a
+  reused cross-store `Z_PK`, recurrence, assignment, a subtask, all-day, and a
+  row-scoped defect; round-trip + committed-fixture + capability + `Lists()` +
+  store-namespacing + recurrence/assignment + no-`ReadDirFS`-fallback + degraded-schema
+  + unsupported-schema + row/stream error-scoping tests, plus a `backup` `ReadDir`
+  test (listing, `fs.ErrNotExist`, path-escape guards). Containerized gates (gofmt /
+  `go vet` / golangci-lint **0 issues** / `go test -race`) green on the project dev CT.
+  Coverage: `reminders` **81.2%**, `backup` **83.9%** (up from 81.8% with `ReadDir`);
+  others unchanged (`calls` 83.0%, `contacts` 80.4%, `messages` 79.6%, `calendar`
+  83.8%, `notes` 84.0%, `safari` 86.6%, `internal/applenotes` 85.7%,
+  `internal/typedstream` 75.6%, `internal/introspect` 90.7%, `internal/cocoa` 100%;
+  `cmd/ibp-dump` + `internal/sqlitedb` untested by design).
+- **Differential passed → `reminders.1` validated.** iLEAPP's `reminders.py` is stale
+  on the iOS-18 schema — it queries `ZREMCDOBJECT.ZTITLE1` and guards on
+  `ZREMCDOBJECT.ZLASTMODIFIEDDATE`, but reminders live in `ZREMCDREMINDER` (title
+  `ZTITLE`) and `ZREMCDOBJECT` has no `ZLASTMODIFIEDDATE`, so it returns **zero**
+  reminders (the same notes-class staleness; confirmed by reading its source and by an
+  empirical run producing no reminders output). So the oracle is **split**: iLEAPP's
+  confirmed store glob and Cocoa epoch (MIT, attributed) plus, as the authoritative
+  cross-check, `deploy/diff_reminders.py`'s own SQL re-run against a scratch copy of
+  **every** store, resolving ordinals per store and keyed by (store,
+  `ZREMCDREMINDER.Z_PK`) with a both-directions set check. It cross-checked **every**
+  reminder and list across **every** store on title, notes, completion, flagged,
+  priority, all-day, every timestamp, marked-for-deletion, parent, identifier, list,
+  account, recurrence (frequency/interval) and assignee — **zero mismatches**,
+  both-directions set clean, zero row errors, empty `Capability.Missing`.
+  The parser needed **no** correctness change after the pre-coding introspection.
+- `cmd/ibp-dump` gained `-domain reminders` (reminder + list line types);
+  `deploy/diff_reminders.py` + `dump-study-reminders` / `diff-study-reminders` Makefile
+  targets added; `NOTICE`, `docs/schemas/reminders.md`, `docs/schemas/README.md`,
+  `README.md` and `CHANGELOG.md` (`[Unreleased]`) updated in the same change. The
+  release stays uncut — the version bump and tag are the Operator's.
+
 ## Decisions log
 
 Append-only. Adjudicated canon carries a date; in-milestone gap-decisions cite the
@@ -868,3 +956,62 @@ restated in full.
   Per the M6 precedent (never tag/push unasked), safari is recorded in `CHANGELOG.md`
   under `[Unreleased]`; the version bump and annotated tag for the next release are the
   Operator's, applied after the privacy gate + commit from the main checkout.
+- **M8 — reminders store located by spike: multi-file CoreData, NOT `Calendar.sqlitedb`.**
+  Read-only introspection of the study backup found the reminder data in
+  `AppDomainGroup-group.com.apple.reminders/Container_v1/Stores/Data-*.sqlite` — a
+  CloudKit-mirrored CoreData store per account plus a fixed-name `Data-local.sqlite`
+  (the calendar store's reminder columns stay unused, confirming the ~iOS-13 move). The
+  data lives in `ZREMCDREMINDER` (reminders), `ZREMCDBASELIST` (lists) and the shared
+  `ZREMCDOBJECT` (accounts/recurrence/assignments/sharees), mixed CoreData inheritance.
+- **M8 — new additive core capability `backup.ReadDirFS` (Operator-approved 2026-07-20).**
+  The reminder data store is `Data-<UUID>.sqlite` with a UUID recorded in no manifest
+  (verified: no peer-refs in any store's `Z_METADATA`, and the fixed-name
+  `Data-local.sqlite` holds zero reminders on the study backup). The base `FS`
+  (`Materialize`+`Exists`) cannot enumerate a directory, so reading reminders
+  correctly requires listing `Container_v1/Stores` — a public-API question beyond the
+  reminders package. Rather than read the fixed-name store only (a wrong-but-plausible
+  *empty* result — the exact failure the charter forbids), the Operator approved an
+  **additive optional** interface `backup.ReadDirFS{ FS; ReadDir(domain, relDir)
+  ([]string, error) }` mirroring `io/fs.ReadDirFS`: the base `FS` contract is
+  UNCHANGED (no host breaks), `DirFS` implements it (read-only — listing never
+  materializes or mutates), and a host that has not adopted it degrades honestly
+  (`reminders` reads only `Data-local.sqlite` and reports `cloudkit_stores` in
+  `Capability.Missing`). This is the first multi-store domain whose file *names* are
+  unknowable in advance (safari's two stores are fixed-name); the capability is the
+  general mechanism for that.
+- **M8 — identity is (Store, Z_PK); a stream-scoped error terminates the whole
+  multi-store iteration.** Because each store has its own `Z_PK` sequence, `Reminder`
+  and `List` carry `Store` (the store's base filename) and the differential keys on
+  (store, id). Row-scoped scan errors are yielded and the stream continues (within and
+  across stores); a stream-scoped error (e.g. a closed/broken store) yielded from any
+  store ENDS the whole `Reminders()`/`Lists()` iteration — a stream-scoped failure
+  terminates iteration by contract, so it must not silently roll on to the next store.
+- **M8 — Z_ENT resolved per store (the M5 rule, generalized) — proven on real data.**
+  The study's `Data-local.sqlite` renumbers `REMCDAccount`/`REMCDRecurrenceRule`/
+  `REMCDAssignment`/`REMCDSharee` vs the CloudKit stores (a
+  `REMCDGroceryOperationQueueItem` inserted mid-`Z_PRIMARYKEY`). The parser resolves
+  each store's ordinals by name at Open; a hard-coded or store-shared ordinal would
+  mis-read a store. The committed fixture uses two stores with different non-standard
+  ordinals and a reused cross-store `Z_PK` to lock this in.
+- **M8 — timestamps are Cocoa-2001 seconds, undated is NULL (no sentinel).** All six
+  `ZREMCDREMINDER` date columns pinned by magnitude to Cocoa seconds (2012–2026;
+  1981–1995 as Unix — impossible), REAL, via `cocoa.FromSecondsFloat`; iLEAPP's
+  `+ 978307200` confirms. Unlike calendar's floating/all-day sentinels, an undated
+  reminder is a plain NULL; an all-day reminder carries a date-only `ZDUEDATE` flagged
+  by `ZALLDAY`. Titles/notes are plain columns — no blob decode.
+- **M8 — split-oracle differential (iLEAPP reminders export stale, like notes).**
+  iLEAPP `reminders.py` queries `ZREMCDOBJECT.ZTITLE1` and guards on
+  `ZREMCDOBJECT.ZLASTMODIFIEDDATE`; on the iOS-18 schema reminders are in
+  `ZREMCDREMINDER` (title `ZTITLE`) and `ZREMCDOBJECT` has no `ZLASTMODIFIEDDATE`, so
+  it returns zero reminders (confirmed by source + an empirical run). The oracle is
+  therefore split: iLEAPP's confirmed store glob and Cocoa epoch (MIT, attributed) plus
+  the authoritative `deploy/diff_reminders.py` — each store's own SQL, per-store
+  ordinal resolution, keyed by (store, `ZREMCDREMINDER.Z_PK`), both-directions set
+  check. All clean on first run after the pre-coding introspection (every reminder and
+  list across every store). Recurrence-constant and assignee interpretations are
+  surfaced raw and documented-to-validate (no MIT oracle interprets them; the raw-code
+  discipline of calls' `Handle.Type` and calendar's `Recurrence.frequency`).
+- **M8 — pins.** No new Go module dependencies (`reminders` uses stdlib + the internal
+  packages; `ReadDirFS`/`DirFS.ReadDir` are stdlib-only); `go.mod`/`go.sum` unchanged.
+  Same toolchain + iLEAPP oracle pins as M1–M7 (`reminders.py` ships in the same iLEAPP
+  v2026.1.0 image).

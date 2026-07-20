@@ -80,6 +80,19 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   Safari Bookmarks and History exports in phase 1; its query semantics re-run in
   phase 2, keyed by bookmarks.id and history_visits.id).
 
+  M8 (reminders) additionally cross-referenced scripts/artifacts/reminders.py for
+  two facts: the store glob (**/Reminders/Container_v1/Stores/*.sqlite*, which
+  enumerates every per-account store) and the Cocoa-2001 epoch conversion
+  (DATETIME(col + 978307200, 'UNIXEPOCH')). iLEAPP's reminders.py is otherwise STALE
+  on the iOS-18 schema — it queries ZREMCDOBJECT.ZTITLE1 and guards on
+  ZREMCDOBJECT.ZLASTMODIFIEDDATE, but reminders live in ZREMCDREMINDER (title ZTITLE)
+  and ZREMCDOBJECT has no ZLASTMODIFIEDDATE, so it returns zero reminders (the same
+  notes-class staleness). It is therefore a split-oracle CONTRIBUTOR (glob + epoch),
+  NOT the differential oracle: deploy/diff_reminders.py uses each store's own SQL,
+  keyed by (store, ZREMCDREMINDER.Z_PK) across every enumerated store, as the
+  authoritative cross-check. Attributed inline in reminders/schema.go and
+  deploy/diff_reminders.py.
+
 typedstream format (M3 internal/typedstream)
 --------------------------------------------
 

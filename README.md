@@ -1,17 +1,17 @@
 # ios-backup-parser
 
 Typed Go readers for the personal data inside an iOS/iPadOS backup — **messages,
-contacts, call history, calendar, notes**, and **Safari** (bookmarks, reading list,
-history).
+contacts, call history, calendar, notes**, **Safari** (bookmarks, reading list,
+history), and **Reminders**.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/novkostya/ios-backup-parser.svg)](https://pkg.go.dev/github.com/novkostya/ios-backup-parser)
 [![CI](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml/badge.svg)](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8.svg)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **Status: v0.1 — first release**, plus **Safari** landed on `main` since (the first
-> post-v0.1 domain). Every domain is validated against a real decrypted backup.
-> Pre-1.0, so the API may still change before v1.
+> **Status: v0.1 — first release**, plus **Safari** and **Reminders** landed on `main`
+> since (the first post-v0.1 domains). Every domain is validated against a real
+> decrypted backup. Pre-1.0, so the API may still change before v1.
 
 > ⚠️ **Intended use.** This library exposes a person's entire private life. Use it only
 > on **your own** backups, or data you are **explicitly authorized** to access. See
@@ -53,6 +53,7 @@ string; the `Schema` label is a project-internal, discovery-order ordinal.
 | Calendar | [`calendar`](calendar) | `Calendar.sqlitedb` | plain SQLite | `calendar.1` | validated |
 | Notes | [`notes`](notes) | `NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` | validated |
 | Safari | [`safari`](safari) | `Bookmarks.db` (+ `History.db`) | plain SQLite | `safari.1` | validated |
+| Reminders | [`reminders`](reminders) | `Container_v1/Stores/Data-*.sqlite` | CoreData (per-account stores) | `reminders.1` | validated |
 
 The per-domain schema reference — tables, joins, every timestamp column's epoch and
 unit, and the evidence behind each fingerprint — is in [`docs/schemas/`](docs/schemas).
@@ -101,7 +102,8 @@ Every domain follows this exact shape — `Open`, `Capability`, `Close`, and str
 iterators. Runnable examples live in each package's `example_test.go` (rendered on
 pkg.go.dev): [contacts](contacts/example_test.go), [calls](calls/example_test.go),
 [messages](messages/example_test.go), [calendar](calendar/example_test.go),
-[notes](notes/example_test.go), [safari](safari/example_test.go).
+[notes](notes/example_test.go), [safari](safari/example_test.go),
+[reminders](reminders/example_test.go).
 
 The original backup is never opened by SQLite: `Materialize` hands the parser a
 private, mutation-safe copy (including `-wal`/`-shm`/`-journal` sidecars), so a
@@ -116,8 +118,8 @@ live WAL can never be replayed into your only copy of a backup.
 
 ## Intended use
 
-This library reads messages, contacts, call history, calendar, and notes — effectively
-someone's whole private life. It exists for people who want to **own and inspect their
+This library reads messages, contacts, call history, calendar, notes, Safari history
+and reminders — effectively someone's whole private life. It exists for people who want to **own and inspect their
 own data**: personal backup browsers, archival tools, migration helpers, and lawful
 digital-forensics work.
 
