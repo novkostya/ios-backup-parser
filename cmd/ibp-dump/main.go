@@ -17,26 +17,30 @@ import (
 	"github.com/novkostya/ios-backup-parser/contacts"
 	"github.com/novkostya/ios-backup-parser/messages"
 	"github.com/novkostya/ios-backup-parser/notes"
+	"github.com/novkostya/ios-backup-parser/safari"
 )
 
 type line struct {
-	Type       string             `json:"type"` // capability | person | group | call | message | chat | event | calendar | note | folder | row_error | unavailable
-	Capability *backup.Capability `json:"capability,omitempty"`
-	Person     *contacts.Person   `json:"person,omitempty"`
-	Group      *contacts.Group    `json:"group,omitempty"`
-	Call       *calls.Call        `json:"call,omitempty"`
-	Message    *messages.Message  `json:"message,omitempty"`
-	Chat       *messages.Chat     `json:"chat,omitempty"`
-	Event      *calendar.Event    `json:"event,omitempty"`
-	Calendar   *calendar.Calendar `json:"calendar,omitempty"`
-	Note       *notes.Note        `json:"note,omitempty"`
-	Folder     *notes.Folder      `json:"folder,omitempty"`
-	Error      string             `json:"error,omitempty"`
+	Type        string                  `json:"type"` // capability | person | group | call | message | chat | event | calendar | note | folder | bookmark | reading_list | visit | row_error | unavailable
+	Capability  *backup.Capability      `json:"capability,omitempty"`
+	Person      *contacts.Person        `json:"person,omitempty"`
+	Group       *contacts.Group         `json:"group,omitempty"`
+	Call        *calls.Call             `json:"call,omitempty"`
+	Message     *messages.Message       `json:"message,omitempty"`
+	Chat        *messages.Chat          `json:"chat,omitempty"`
+	Event       *calendar.Event         `json:"event,omitempty"`
+	Calendar    *calendar.Calendar      `json:"calendar,omitempty"`
+	Note        *notes.Note             `json:"note,omitempty"`
+	Folder      *notes.Folder           `json:"folder,omitempty"`
+	Bookmark    *safari.Bookmark        `json:"bookmark,omitempty"`
+	ReadingList *safari.ReadingListItem `json:"reading_list,omitempty"`
+	Visit       *safari.Visit           `json:"visit,omitempty"`
+	Error       string                  `json:"error,omitempty"`
 }
 
 func main() {
 	root := flag.String("root", "", "path to a decrypted <Domain>/<relativePath> backup tree")
-	domain := flag.String("domain", "contacts", "domain to dump (contacts, calls, messages, calendar, notes)")
+	domain := flag.String("domain", "contacts", "domain to dump (contacts, calls, messages, calendar, notes, safari)")
 	flag.Parse()
 	if *root == "" {
 		flag.Usage()
@@ -67,6 +71,8 @@ func run(root, domain string) error {
 		return dumpCalendar(fsys, enc)
 	case "notes":
 		return dumpNotes(fsys, enc)
+	case "safari":
+		return dumpSafari(fsys, enc)
 	default:
 		return fmt.Errorf("unknown domain %q", domain)
 	}
@@ -267,6 +273,70 @@ func dumpNotes(fsys backup.FS, enc *json.Encoder) error {
 		switch {
 		case err == nil:
 			if err := enc.Encode(line{Type: "folder", Folder: &folder}); err != nil {
+				return err
+			}
+		case errors.Is(err, backup.ErrUnavailable):
+			if err := enc.Encode(line{Type: "unavailable", Error: err.Error()}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func dumpSafari(fsys backup.FS, enc *json.Encoder) error {
+	s, err := safari.Open(fsys)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	capability := s.Capability()
+	if err := enc.Encode(line{Type: "capability", Capability: &capability}); err != nil {
+		return err
+	}
+	for bm, err := range s.Bookmarks() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "bookmark", Bookmark: &bm}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	for item, err := range s.ReadingList() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "reading_list", ReadingList: &item}); err != nil {
+				return err
+			}
+		case errors.Is(err, backup.ErrUnavailable):
+			if err := enc.Encode(line{Type: "unavailable", Error: err.Error()}); err != nil {
+				return err
+			}
+		case isRowError(err):
+			if err := enc.Encode(line{Type: "row_error", Error: err.Error()}); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	for visit, err := range s.History() {
+		switch {
+		case err == nil:
+			if err := enc.Encode(line{Type: "visit", Visit: &visit}); err != nil {
 				return err
 			}
 		case errors.Is(err, backup.ErrUnavailable):

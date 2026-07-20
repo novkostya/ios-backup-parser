@@ -67,6 +67,19 @@ iLEAPP — iOS Logs, Events, And Plist Parser
   ZSNIPPET are the oracles instead. Attributed inline in notes/schema.go and
   deploy/diff_notes.py.
 
+  M7 (safari) additionally cross-referenced scripts/artifacts/safariBookmarks.py and
+  scripts/artifacts/safariHistory.py for the Safari interpretations: the bookmarks
+  read (SELECT title, url, hidden FROM bookmarks — every row of the tree), the
+  browsing-history history_visits LEFT JOIN history_items join topology, the
+  history_visits.origin mapping (0 Local Device / 1 iCloud Synced Device), the
+  redirect_source / redirect_destination visit-id → URL resolution, and the
+  history_visits.visit_time Cocoa conversion (datetime(visit_time + 978307200,
+  'unixepoch')) — which pinned History.db's Cocoa-2001 epoch against Bookmarks.db's
+  Unix-1970 last_modified (the two-epoch trap). Attributed inline in safari/types.go
+  and deploy/diff_safari.py. iLEAPP is also the differential oracle for safari (its
+  Safari Bookmarks and History exports in phase 1; its query semantics re-run in
+  phase 2, keyed by bookmarks.id and history_visits.id).
+
 typedstream format (M3 internal/typedstream)
 --------------------------------------------
 

@@ -15,7 +15,8 @@ infrastructure lives outside this repo.
 | **M3** | `messages` — chats / messages / attachments join, typedstream text | **Complete** — `messages` package + `internal/typedstream` decoder, gates green, differential passed; `messages.1` **validated** |
 | **M4** | `calendar` (`Calendar.sqlitedb`) | **Complete** — `calendar` package (plain SQLite, join-heavy events + calendars), gates green, differential passed; `calendar.1` **validated** |
 | **M5** | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | **Complete** — `notes` package + `internal/applenotes` gzip+protobuf decoder, gates green, differential passed; `notes.1` **validated** |
-| **M6** | v0.1 — docs, examples, schema-coverage table, tag | **Complete** — per-domain godoc examples, README schema-coverage table, `CHANGELOG.md`, docs finalized; M5 coverage backfilled; gates green; awaiting operator commit + `v0.1.0` tag |
+| **M6** | v0.1 — docs, examples, schema-coverage table, tag | **Complete** — per-domain godoc examples, README schema-coverage table, `CHANGELOG.md`, docs finalized; M5 coverage backfilled; gates green; `v0.1.0` tagged |
+| **M7** | `safari` (`Bookmarks.db` + `History.db`) — first post-v0.1 backlog domain | **Complete** — `safari` package (bookmarks / reading list / history over two plain-SQLite stores), gates green, differential passed; `safari.1` **validated** |
 
 ## M0 — schema spike (complete)
 
@@ -388,6 +389,83 @@ a coherent first release and hands the tag to the Operator.
   The diff is delivered to the canonical Mac checkout for the `make privacy-check` gate
   and the Operator's commit + tag — the milestone's final step.
 
+## M7 — safari (complete)
+
+**Goal.** The `safari` domain — the first **post-v0.1 backlog** domain (charter
+ordering: Safari first, a clean two-oracle differential). Bookmarks, the reading list
+and browsing history, following the M1–M5 house shape (streaming iterators, eager
+validation, capability degradation, fixtures, gates, operator-local differential). The
+new wrinkle: the domain **spans two plain-SQLite stores** (`Bookmarks.db` +
+`History.db`).
+
+**Delivered.**
+
+- **`safari`** domain: `Open` (eager `safari.1` validation on `Bookmarks.db`), three
+  `iter.Seq2` streams from one `Reader` (named `Reader`, per the house handle
+  convention): `Bookmarks()` (the self-referential bookmark tree — folders vs leaves by
+  `Bookmark.IsFolder`, the built-in special folders by `SpecialID`), `ReadingList()`
+  (leaf rows under the `com.apple.ReadingList` folder, discriminated by a non-NULL
+  `bookmarks.read` column — `0` unread / `1` read), and `History()` (one record per
+  `history_visits` row, the page URL and visit count joined from `history_items`,
+  redirects as raw visit ids, `origin` raw). Reading-list items are excluded from
+  `Bookmarks()`; the two streams partition the table (union == every row), so the
+  differential's both-directions set matches iLEAPP's flat bookmarks export.
+- **Two databases, one capability report.** `History.db` is an **optional second
+  store**: `Open` opens it when present and recognized; absent or unrecognized, it never
+  fails `Open` — `History()` yields `backup.ErrUnavailable` and `history` lands in
+  `Capability.Missing`. `Bookmarks.db` alone determines the `safari.1` fingerprint.
+- **The two-epoch trap — the headline catch of the pre-coding introspection.**
+  `Bookmarks.db.last_modified` is **Unix-epoch seconds** while `History.db.visit_time`
+  is **Cocoa-2001 seconds** — the two Safari stores disagree on their epoch. Reading
+  bookmarks as Cocoa would date them to ~2043–2052 (a plausible-looking but wrong
+  future); the magnitude and a cross-check against the reading-list plist `DateAdded`
+  (which equals `last_modified`-as-Unix exactly) pinned it. A safari-local `unixFromFloat`
+  converts bookmarks (kept out of `internal/cocoa`, which is Cocoa-only by design);
+  history uses `cocoa.FromSecondsFloat`.
+- **Schema re-confirmed by introspection before coding (the M2–M5 lesson).** Read-only
+  introspection of scratch copies (originals never opened) pinned: `bookmarks.type`
+  {0 leaf, 1 folder}; `special_id` {1 BookmarksBar, 2 BookmarksMenu, 3
+  `com.apple.ReadingList`}; the tree via `parent` (Root is id 0); the reading-list
+  discriminator (`read IS NOT NULL`, coinciding exactly with the reading-list folder's
+  children); the history join (`history_visits` ⟕ `history_items`, `origin` 0/1,
+  redirect self-refs); and the two epochs. Reading-list plist metadata (`DateAdded` /
+  `PreviewText` in the `extra_attributes` binary plist) is **deferred** — decoding it
+  needs a binary-plist reader; `LastModified` (the add/refresh time) is surfaced from
+  the column instead. Inline favicon BLOBs and the separate favicon store are out of
+  scope; no `FileRef` is emitted (never-fabricate).
+- Testing ladder rungs 1–3: builder-generated synthetic fixtures for **both** stores
+  (committed; `make fixtures` regenerates) exercising the tree, special folders, both
+  reading-list read states, a redirect chain, the two epochs, and a row-scoped defect
+  in each store (corrupt `last_modified` / `visit_time`); round-trip + committed-fixture
+  + degraded-schema + reading-list-unavailable + history-unavailable +
+  history-unsupported-degrades + unsupported-schema + row/stream error-scoping tests.
+  Containerized gates (gofmt / `go vet` / golangci-lint **0 issues** / `go test -race`)
+  green on the project dev CT. Coverage: `safari` **86.6%** (`backup` 81.8%,
+  `calls` 83.0%, `contacts` 80.4%, `messages` 79.6%, `calendar` 83.8%, `notes` 84.0%,
+  `internal/applenotes` 85.7%, `internal/typedstream` 75.6%, `internal/introspect`
+  90.7%, `internal/cocoa` 100%; `cmd/ibp-dump` + `internal/sqlitedb` untested by design).
+- **Differential vs iLEAPP passed → `safari.1` validated.** Phase 1 (iLEAPP's Safari
+  **Bookmarks** and **History** exports, black-box) and phase 2 (its query semantics —
+  the flat bookmarks read and the `history_visits` ⟕ `history_items` join with origin /
+  redirect resolution — re-run against scratch copies, keyed by `bookmarks.id` and
+  `history_visits.id`, both-directions set check) cross-checked **every** bookmark and
+  reading-list row on title/url/hidden/tree/special/order/read/timestamp and **every**
+  visit on time/title/url/visit_count/redirect/origin — the full history set on the
+  study backup. Zero row errors; empty `Capability.Missing` (both stores present, every
+  optional unit present). The parser needed **no** correctness change after the
+  pre-coding introspection. The **only** phase-1 divergence was a **±1-second rendering
+  artifact** on a handful of visits: iLEAPP renders `visit_time` via SQLite
+  `datetime(…,'unixepoch')`, which **rounds** the fractional second, while the parser
+  keeps the precise sub-second value and truncates on display (the two disagree only for
+  a fraction ≥ 0.5). Verified against the raw sub-second values; the parser holds the
+  exact value, so `diff_safari.py` phase 1 tolerates ±1s (the calls domain's Julian-day
+  precedent) and phase 2 — truncation-identical on both sides — is exact. The harness
+  was corrected; the parser was not.
+- `cmd/ibp-dump` gained `-domain safari` (bookmark / reading_list / visit line types);
+  `deploy/diff_safari.py` + `dump-study-safari` / `diff-study-safari` Makefile targets
+  added; `NOTICE`, `docs/schemas/safari.md`, `docs/schemas/README.md`, `README.md` and
+  `CHANGELOG.md` updated in the same change.
+
 ## Decisions log
 
 Append-only. Adjudicated canon carries a date; in-milestone gap-decisions cite the
@@ -733,3 +811,60 @@ restated in full.
   (minor releases may break API until v1.0.0) are stated in the README and CHANGELOG.
 - **M6 — pins.** No new Go module dependencies (examples, docs, and a changelog only;
   no non-test Go changed); `go.mod`/`go.sum` unchanged. Same toolchain pins as M1–M5.
+- **M7 — a domain spanning two databases (in-milestone gap decision).** Unlike M1–M5
+  (one domain = one database), safari reads `Bookmarks.db` (bookmarks + reading list)
+  **and** `History.db` (history). One `Reader` holds both handles and exposes three
+  streams (`Bookmarks`, `ReadingList`, `History`). Only `Bookmarks.db` determines the
+  `safari.1` fingerprint; `History.db` is an **optional cross-file unit** — introspected
+  separately (`historySpec`), and any failure to open/recognize it degrades `History()`
+  to `ErrUnavailable` (`history` in `Missing`) rather than failing `Open`. `history` is
+  therefore added to `Capability.Missing` at Open (not by the `Bookmarks.db` introspect
+  pass, which cannot see it). No public-API shape change: it is the same
+  `{Domain, Supported, Schema, Missing}` capability and the same two-stream-plus-optional
+  pattern as calendar (Events/Calendars), generalized to three streams.
+- **M7 — the two-epoch trap: Bookmarks is Unix, History is Cocoa (pinned by
+  introspection, the wrong-but-plausible bug this domain must not ship).** Read-only
+  introspection of scratch copies showed `bookmarks.last_modified` (REAL) lands in
+  2012–2021 as Unix seconds (2043–2052 as Cocoa — an impossible future for a modified
+  date) and equals the reading-list plist `DateAdded` exactly when read as Unix, while
+  `history_visits.visit_time` (REAL) lands in 2026 as Cocoa (1995 as Unix — before
+  Safari existed) and matches iLEAPP's `datetime(visit_time + 978307200, 'unixepoch')`.
+  So the two Safari stores use **different epochs**. History uses `cocoa.FromSecondsFloat`;
+  bookmarks uses a safari-local `unixFromFloat` — deliberately **not** added to
+  `internal/cocoa`, whose charter (per its package doc) is Cocoa-epoch only. Documented
+  prominently in `docs/schemas/safari.md` and the cross-domain timestamp table.
+- **M7 — reading-list discriminator is `read IS NOT NULL`; the two streams partition
+  the table.** A reading-list item is a leaf (`type = 0`) hanging off the `special_id = 3`
+  `com.apple.ReadingList` folder; the per-row marker is a non-NULL `bookmarks.read`
+  column (0 unread / 1 read), which on the observed schema coincides exactly with
+  folder membership. `Bookmarks()` streams `read IS NULL`, `ReadingList()` streams
+  `read IS NOT NULL`; their union is every row, matching iLEAPP's flat
+  `SELECT title, url, hidden FROM bookmarks` export (which does not distinguish reading
+  list) for the both-directions set check. Absent the `read` column (`reading_list` in
+  `Missing`), `ReadingList()` is `ErrUnavailable` and `Bookmarks()` emits every row.
+- **M7 — reading-list plist metadata deferred; no FileRef.** Reading-list `DateAdded` /
+  `PreviewText` / `DateLastViewed` live in the `extra_attributes` **binary plist** BLOB;
+  decoding it needs a binary-plist reader — deferred (a forward note, like calendar's
+  `ExceptionDate` and messages' rich runs). The column `last_modified` (which equals a
+  freshly-added item's `DateAdded`) is surfaced as the reading-list timestamp. Inline
+  favicon BLOBs (`bookmarks.icon`) and the separate favicon store are out of scope, and
+  no bookmark/visit references a backup file, so the domain emits **no** `backup.FileRef`
+  (never-fabricate).
+- **M7 — differential ±1s tolerance (SQLite round vs parser truncate; the calls
+  precedent).** iLEAPP renders `visit_time` via SQLite `datetime(…,'unixepoch')`, which
+  **rounds** the fractional second, while the parser keeps the precise sub-second value
+  and truncates on display — so a visit whose fractional part is ≥ 0.5 renders one
+  second apart (2 of the study backup's visits, verified against the raw values). The
+  parser holds the exact value; `diff_safari.py` phase 1 tolerates ±1s (matching the
+  calls domain's Julian-day rounding tolerance) and phase 2 — truncation-identical on
+  both sides, keyed by `history_visits.id` — is the exact gate. Harness corrected;
+  parser untouched. (Escalation stayed on-charter: raw-value inspection, never GPL
+  source.)
+- **M7 — pins.** No new Go module dependencies (`safari` uses stdlib + the internal
+  packages; the binary-plist decode that would need a dependency is deferred);
+  `go.mod`/`go.sum` unchanged. Same toolchain + iLEAPP oracle pins as M1–M6
+  (`safariBookmarks.py` / `safariHistory.py` ship in the same iLEAPP v2026.1.0 image).
+- **M7 — safari lands on `main` post-v0.1; the next release tag is Operator-gated.**
+  Per the M6 precedent (never tag/push unasked), safari is recorded in `CHANGELOG.md`
+  under `[Unreleased]`; the version bump and annotated tag for the next release are the
+  Operator's, applied after the privacy gate + commit from the main checkout.

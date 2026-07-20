@@ -1,8 +1,8 @@
 # Domain schemas — observed reference
 
-Per-domain schema documentation for the five domains, from **direct introspection
-of a real decrypted backup** (M0 schema spike). These docs are the ground truth M1+
-parsers are written against.
+Per-domain schema documentation for the five M0 domains plus the post-v0.1 additions
+(safari, M7), from **direct introspection of a real decrypted backup**. These docs are
+the ground truth the parsers are written against.
 
 **Scrubbed by construction.** Structure only — table names, columns, joins, types,
 timestamp epochs, storage idioms. Never row data, never counts, date ranges, names,
@@ -50,12 +50,14 @@ carries a status:
   real backup for this fingerprint. The differential is a required manual gate, not a
   nicety.
 
-M0 left all five at **`observed`**. Since then all five are **`validated`** by an
-operator-local differential: **`contacts.1`** (M1), **`calls.1`** (M2),
-**`messages.1`** (M3), **`calendar.1`** (M4) and **`notes.1`** (M5). Four used iLEAPP
-directly as the oracle; notes used iLEAPP's own (MIT) note-body decoder plus the
-store's SQL and Apple's stored snippet, because iLEAPP's notes export returns zero
-rows on the iOS-18 schema (see [notes.md](notes.md) → Validation).
+M0 left the five spike domains at **`observed`**; all are now **`validated`** by an
+operator-local differential — **`contacts.1`** (M1), **`calls.1`** (M2),
+**`messages.1`** (M3), **`calendar.1`** (M4) and **`notes.1`** (M5) — as is the first
+post-v0.1 domain, **`safari.1`** (M7: bookmarks, reading list and history). Five used
+iLEAPP directly as the oracle (safari via its Bookmarks and History exports, keyed by
+`bookmarks.id` and `history_visits.id`); notes used iLEAPP's own (MIT) note-body
+decoder plus the store's SQL and Apple's stored snippet, because iLEAPP's notes export
+returns zero rows on the iOS-18 schema (see [notes.md](notes.md) → Validation).
 
 ## Storage idioms
 
@@ -64,7 +66,7 @@ strategy:
 
 | Idiom | Domains | Consequence for the parser |
 |---|---|---|
-| Plain app SQLite | contacts, messages, calendar | Natural tables; relations by id columns / explicit FKs |
+| Plain app SQLite | contacts, messages, calendar, safari | Natural tables; relations by id columns / explicit FKs |
 | **CoreData** | calls, notes | `Z`-prefixed tables, `Z_PK`/`Z_ENT` indirection, `Z_PRIMARYKEY` entity map, `Z_METADATA` model version; single-table inheritance (notes) |
 | Blob-encoded payload | messages (`attributedBody`), notes (`ZICNOTEDATA.ZDATA`) | Text/content is **not** a column — it is a serialized blob (typedstream / gzip+protobuf) that must be decoded |
 
@@ -80,12 +82,17 @@ off by 10⁹). Every date column's epoch and unit is documented per domain; the 
 | calendar | `CalendarItem.start_date` | 2001-01-01 (Cocoa) | **seconds** | REAL |
 | notes | `ZICCLOUDSYNCINGOBJECT.ZCREATIONDATE` | 2001-01-01 (Cocoa) | **seconds** | REAL |
 | **messages** | `message.date` | 2001-01-01 (Cocoa) | **NANOseconds** | INTEGER |
+| **safari** (bookmarks) | `bookmarks.last_modified` | **1970-01-01 (Unix)** | **seconds** | REAL |
+| safari (history) | `history_visits.visit_time` | 2001-01-01 (Cocoa) | **seconds** | REAL |
 
-**All five share the Cocoa 2001 epoch; only `messages` is in nanoseconds.** The unit
-divergence is the single most dangerous cross-domain footgun — a shared "Cocoa date"
-helper must take the unit per column, not assume one. To Unix: `unix = cocoa_seconds
-+ 978307200` (divide the nanosecond columns by 1e9 first). Confirmed against iLEAPP's
-`fix_cocoa_date` (divide-by-1e9 when the value exceeds ~1e15, then Cocoa→UTC).
+**Cocoa 2001 everywhere EXCEPT Safari's `Bookmarks.db`, which is Unix 1970; and only
+`messages` is in nanoseconds.** Two footguns, not one. (1) The unit divergence: a shared
+"Cocoa date" helper must take the unit per column, not assume one — to Unix,
+`unix = cocoa_seconds + 978307200` (divide the nanosecond columns by 1e9 first),
+confirmed against iLEAPP's `fix_cocoa_date`. (2) The **epoch** divergence: Safari's two
+stores disagree with each other — `Bookmarks.db.last_modified` is already Unix seconds
+(no delta), while `History.db.visit_time` is Cocoa seconds. Reading either as the other
+is off by 31 years (see [safari.md](safari.md), the two-epoch trap).
 
 Caveat (calendar): EventKit uses **negative / far-past sentinel** date values for
 floating, all-day, and birthday items, and permits far-future values; consumers must
@@ -125,7 +132,11 @@ the matching artifact as they land: `addressBook.py` (M1, contacts),
 `Participant.status` / `entity_type` and `sharing_status` enums, the `_float`
 timezone sentinel) and `notes.py` (M5, notes — itself modified from mac_apt's Notes
 plugin, MIT; the note column choices, the gzip+protobuf body encoding, and its own
-body decoder), each attributed in `NOTICE` and inline. iLEAPP is also the differential
+body decoder) and `safariBookmarks.py` / `safariHistory.py` (M7, safari — the
+`title`/`url`/`hidden` bookmarks read, the `history_visits` ⟕ `history_items` join, the
+`origin` and redirect id→url resolution, and the `visit_time + 978307200` Cocoa
+conversion that pinned History's epoch against Bookmarks' Unix one), each attributed in
+`NOTICE` and inline. iLEAPP is also the differential
 oracle for those domains — for messages its own typedstream decoder (python-typedstream)
 is the independent oracle that validated the from-scratch Go decoder, and for notes its
 own note-body decoder plays the same role (its full notes export is unusable on the
@@ -142,3 +153,4 @@ oracle only (source never read), documented as the stronger manual cross-check i
 | [messages.md](messages.md) | `HomeDomain/Library/SMS/sms.db` | plain + typedstream | `messages.1` validated |
 | [calendar.md](calendar.md) | `HomeDomain/Library/Calendar/Calendar.sqlitedb` | plain | `calendar.1` validated |
 | [notes.md](notes.md) | `AppDomainGroup-group.com.apple.notes/NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` validated |
+| [safari.md](safari.md) | `HomeDomain/Library/Safari/Bookmarks.db` (+ `History.db`) | plain (two stores) | `safari.1` validated |

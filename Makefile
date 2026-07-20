@@ -259,6 +259,37 @@ diff-study-notes: dump-study-notes tc-ileapp ## Operator-local differential: par
 	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_notes.py /src/.difftmp \
 	    --db "/study/$(NOTES_DB)" --study /study
 
+.PHONY: dump-study-safari
+dump-study-safari: tc-go ## Operator-local: stream safari from the study tree to .difftmp/parser-safari.jsonl
+	$(RUN) -w /src \
+	  -v $(GO_BUILD_VOL):/root/.cache/go-build -v $(GO_MOD_VOL):/go/pkg/mod \
+	  -v "$(STUDY_DIR):/study:ro" \
+	  -e CGO_ENABLED=1 -e GOTOOLCHAIN=local $(TC_GO) sh -euc '\
+	    mkdir -p .difftmp && \
+	    go run ./cmd/ibp-dump -root /study -domain safari > .difftmp/parser-safari.jsonl && \
+	    wc -l .difftmp/parser-safari.jsonl'
+
+# Same input-type caveat as diff-study (see above): iLEAPP's safari artifacts glob
+# `**/Safari/Bookmarks.db*` and `**/Safari/History.db*`, so an fs-mode run over the
+# backup-domain tree needs BOTH databases staged into a /private/var/mobile/… shim.
+# iLEAPP's safariBookmarks.py reads `SELECT title,url,hidden FROM bookmarks` (every
+# row — folders, special folders and reading-list items included) and safariHistory.py
+# joins history_visits ⟕ history_items with origin/redirect resolution; the parser
+# mirrors both and additionally splits reading-list items (bookmarks.read IS NOT NULL).
+# Phase 1 compares the two exports; phase 2 re-runs the query semantics against scratch
+# copies of both stores (keyed by bookmarks.id and history_visits.id, both-directions
+# set check) to cover every field the exports omit — and asserts the two-epoch trap
+# (Bookmarks Unix seconds vs History Cocoa seconds).
+.PHONY: diff-study-safari
+diff-study-safari: dump-study-safari tc-ileapp ## Operator-local differential: parser vs iLEAPP safari, record-by-record
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) sh -euc '\
+	    rm -rf /src/.difftmp/ileapp-safari && mkdir -p /src/.difftmp/ileapp-safari && \
+	    stage=$$(mktemp -d)/private/var/mobile/Library/Safari && mkdir -p "$$stage" && \
+	    cp /study/HomeDomain/Library/Safari/Bookmarks.db* /study/HomeDomain/Library/Safari/History.db* "$$stage"/ && \
+	    python /opt/iLEAPP/ileapp.py -t fs -i "$${stage%%/private/var/*}" -o /src/.difftmp/ileapp-safari'
+	$(RUN) -v "$(STUDY_DIR):/study:ro" $(TC_ILEAPP) python /src/deploy/diff_safari.py /src/.difftmp \
+	    --db /study/HomeDomain/Library/Safari/Bookmarks.db --history-db /study/HomeDomain/Library/Safari/History.db
+
 .PHONY: clean
 clean: ## Drop cache volumes and the locally-built toolchain images
 	-$(RUNTIME) run --rm -v $(ROOT):/src $(ALPINE_IMAGE) rm -rf /src/.difftmp

@@ -1,15 +1,17 @@
 # ios-backup-parser
 
 Typed Go readers for the personal data inside an iOS/iPadOS backup — **messages,
-contacts, call history, calendar, notes**.
+contacts, call history, calendar, notes**, and **Safari** (bookmarks, reading list,
+history).
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/novkostya/ios-backup-parser.svg)](https://pkg.go.dev/github.com/novkostya/ios-backup-parser)
 [![CI](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml/badge.svg)](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8.svg)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **Status: v0.1 — first release.** All five domains are validated against a real
-> decrypted backup. Pre-1.0, so the API may still change before v1.
+> **Status: v0.1 — first release**, plus **Safari** landed on `main` since (the first
+> post-v0.1 domain). Every domain is validated against a real decrypted backup.
+> Pre-1.0, so the API may still change before v1.
 
 > ⚠️ **Intended use.** This library exposes a person's entire private life. Use it only
 > on **your own** backups, or data you are **explicitly authorized** to access. See
@@ -50,6 +52,7 @@ string; the `Schema` label is a project-internal, discovery-order ordinal.
 | Messages | [`messages`](messages) | `sms.db` | plain SQLite + typedstream | `messages.1` | validated |
 | Calendar | [`calendar`](calendar) | `Calendar.sqlitedb` | plain SQLite | `calendar.1` | validated |
 | Notes | [`notes`](notes) | `NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` | validated |
+| Safari | [`safari`](safari) | `Bookmarks.db` (+ `History.db`) | plain SQLite | `safari.1` | validated |
 
 The per-domain schema reference — tables, joins, every timestamp column's epoch and
 unit, and the evidence behind each fingerprint — is in [`docs/schemas/`](docs/schemas).
@@ -98,7 +101,7 @@ Every domain follows this exact shape — `Open`, `Capability`, `Close`, and str
 iterators. Runnable examples live in each package's `example_test.go` (rendered on
 pkg.go.dev): [contacts](contacts/example_test.go), [calls](calls/example_test.go),
 [messages](messages/example_test.go), [calendar](calendar/example_test.go),
-[notes](notes/example_test.go).
+[notes](notes/example_test.go), [safari](safari/example_test.go).
 
 The original backup is never opened by SQLite: `Materialize` hands the parser a
 private, mutation-safe copy (including `-wal`/`-shm`/`-journal` sidecars), so a
@@ -128,8 +131,8 @@ connections, and persists nothing (see [SECURITY.md](SECURITY.md)).
 
 ## Contributing
 
-Contributions are welcome — new domains especially (there's a backlog: Safari,
-Reminders, voicemail, WhatsApp). Please read [CONTRIBUTING.md](CONTRIBUTING.md); it
+Contributions are welcome — new domains especially (Safari just landed; the backlog
+continues with Reminders, voicemail, WhatsApp). Please read [CONTRIBUTING.md](CONTRIBUTING.md); it
 covers the containerized build (`make gates`, no local Go needed), the correctness rules
 that keep the library trustworthy, and the license-hygiene boundary. By participating
 you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).

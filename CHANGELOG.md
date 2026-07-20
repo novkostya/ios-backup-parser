@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is pre-1.0,
 so minor releases may make breaking API changes until v1.0.0.
 
+## [Unreleased]
+
+### Added
+
+- `safari` — bookmarks, the reading list, and browsing history over Safari's
+  `Bookmarks.db` and `History.db` (`safari.1`), the first post-v0.1 domain. Three
+  streams from one `Reader`: `Bookmarks()` (the self-referential bookmark tree),
+  `ReadingList()` (leaf rows under the `com.apple.ReadingList` folder, discriminated
+  by a non-NULL `read` column), and `History()` (one record per visit, joined to its
+  page). History is an optional second store — absent or unrecognized, `History()`
+  yields `ErrUnavailable` (`history` in `Missing`) rather than failing `Open`. Note
+  the two epochs: `Bookmarks.db.last_modified` is Unix seconds while
+  `History.db.visit_time` is Cocoa seconds. Validated record-by-record against iLEAPP.
+
 ## [0.1.0] — 2026-07-20
 
 First release: typed, streaming readers for five personal-data domains inside an
@@ -40,4 +54,5 @@ synthetic fixtures.
   gzip+protobuf decoder for note bodies; locked notes are reported, never decrypted
   (`notes.1`).
 
+[Unreleased]: https://github.com/novkostya/ios-backup-parser/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/novkostya/ios-backup-parser/releases/tag/v0.1.0
