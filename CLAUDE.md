@@ -220,6 +220,30 @@ contributor must never mistake green CI for correctness.
   them separate so M5 doesn't treat every body as "encrypted/opaque".
 - **M6 — v0.1.** Docs, examples, schema-coverage table, tag.
 
+## Backlog — post-v0.1 domain candidates (Operator-acked 2026-07-20)
+
+Not scheduled; recorded so absence reads as a decision, not an oversight (parity
+review against iMazing's domain list). Every future domain enters through the M0
+pattern — schema spike first, fingerprint `observed` by introspection of a real
+backup, differential to `validated` — never by assumption.
+
+- **safari** — bookmarks + reading list (`Bookmarks.db`, plain SQLite; the reading
+  list lives inside it) and history. Spike caveat: which Safari artifacts are
+  actually PRESENT in a backup varies across iOS versions (history has moved and
+  may be protection-class-gated) — presence is verified against a real backup,
+  never assumed.
+- **reminders** — its own store since ~iOS 13 (the M0 calendar doc recorded
+  `CalendarItem`'s reminder columns as present-but-unused for exactly this
+  reason); location + idiom (expect CoreData) established by its spike.
+- **voicemail** — small metadata DB + real audio files; likely the easiest win
+  on this list.
+- **whatsapp** — `ChatStorage.sqlite`; the consumer's roadmap already names it.
+- **photos** — **stays parked, deliberately** (charter non-goal): the consumer's
+  Operator ruling covers photos elsewhere (icloudpd + Immich), and
+  `Photos.sqlite` is the most schema-churned database in this space. Message
+  attachments already surface media as `FileRef`s without it. Revisiting this is
+  an Operator decision, not a milestone.
+
 ## Where work runs (read this BEFORE your first command)
 
 - **The driving workstation is a thin client** — no language toolchains, no container
