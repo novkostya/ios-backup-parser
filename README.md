@@ -3,7 +3,8 @@
 Typed Go readers for the personal data inside an iOS/iPadOS backup — **messages,
 contacts, call history, calendar, notes**.
 
-> **Status: pre-v0.1.** Under active development; the API is not stable yet.
+> **Status: v0.1 — first release.** All five domains are validated against a real
+> decrypted backup. Pre-1.0, so the API may still change before v1.
 
 ## What it is
 
@@ -24,6 +25,27 @@ data structures and iterators you can build on.
   blob with no text column at all; the `messages` and `notes` domains decode them
   (from-scratch, dependency-free readers) so a body is never silently dropped. A blob
   that can't be decoded is flagged, never returned as empty.
+
+## Domains
+
+Every domain is **validated** — not merely green against synthetic fixtures, but
+diffed record-by-record against an independent oracle on a real decrypted backup
+(the study device is on the iOS 18.x line). Schema support is detected by
+introspecting the actual tables and columns, never inferred from an iOS version
+string; the `Schema` label is a project-internal, discovery-order ordinal.
+
+| Domain | Package | Database | Storage idiom | Schema | Status |
+|---|---|---|---|---|---|
+| Contacts | [`contacts`](contacts) | `AddressBook.sqlitedb` | plain SQLite | `contacts.1` | validated |
+| Call history | [`calls`](calls) | `CallHistory.storedata` | CoreData | `calls.1` | validated |
+| Messages | [`messages`](messages) | `sms.db` | plain SQLite + typedstream | `messages.1` | validated |
+| Calendar | [`calendar`](calendar) | `Calendar.sqlitedb` | plain SQLite | `calendar.1` | validated |
+| Notes | [`notes`](notes) | `NoteStore.sqlite` | CoreData + gzip/protobuf | `notes.1` | validated |
+
+The per-domain schema reference — tables, joins, every timestamp column's epoch and
+unit, and the evidence behind each fingerprint — is in [`docs/schemas/`](docs/schemas).
+A backup whose schema does not match a known fingerprint fails loudly at `Open`
+(`ErrUnsupportedSchema`, carrying the observed fingerprint), never silently.
 
 ## Use
 
@@ -53,6 +75,12 @@ for person, err := range c.People() {
     }
 }
 ```
+
+Every domain follows this exact shape — `Open`, `Capability`, `Close`, and streaming
+iterators. Runnable examples live in each package's `example_test.go` (rendered on
+pkg.go.dev): [contacts](contacts/example_test.go), [calls](calls/example_test.go),
+[messages](messages/example_test.go), [calendar](calendar/example_test.go),
+[notes](notes/example_test.go).
 
 The original backup is never opened by SQLite: `Materialize` hands the parser a
 private, mutation-safe copy (including `-wal`/`-shm`/`-journal` sidecars), so a

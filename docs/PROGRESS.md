@@ -15,7 +15,7 @@ infrastructure lives outside this repo.
 | **M3** | `messages` — chats / messages / attachments join, typedstream text | **Complete** — `messages` package + `internal/typedstream` decoder, gates green, differential passed; `messages.1` **validated** |
 | **M4** | `calendar` (`Calendar.sqlitedb`) | **Complete** — `calendar` package (plain SQLite, join-heavy events + calendars), gates green, differential passed; `calendar.1` **validated** |
 | **M5** | `notes` (`NoteStore.sqlite`) — locked notes reported, not decrypted | **Complete** — `notes` package + `internal/applenotes` gzip+protobuf decoder, gates green, differential passed; `notes.1` **validated** |
-| M6 | v0.1 — docs, examples, schema-coverage table, tag | Pending |
+| **M6** | v0.1 — docs, examples, schema-coverage table, tag | **Complete** — per-domain godoc examples, README schema-coverage table, `CHANGELOG.md`, docs finalized; M5 coverage backfilled; gates green; awaiting operator commit + `v0.1.0` tag |
 
 ## M0 — schema spike (complete)
 
@@ -315,7 +315,11 @@ reported, never decrypted.
   resolution; round-trip + committed-fixture + degraded-schema + unsupported-schema +
   Folders-unavailable + locked-reported + BodyUndecoded + blank-note + media-FileRef +
   row/stream error-scoping tests. Containerized gates (gofmt / vet / golangci-lint /
-  `go test -race`) green on the project dev CT.
+  `go test -race`) green on the project dev CT. Coverage: `notes` 84.0%,
+  `internal/applenotes` 85.7% (`backup` 81.8%, `calls` 83.0%, `contacts` 80.4%,
+  `messages` 79.6%, `calendar` 83.8%, `internal/typedstream` 75.6%,
+  `internal/introspect` 90.7%, `internal/cocoa` 100%; debug CLI `cmd/ibp-dump`
+  untested by design).
 - **Differential passed → `notes.1` validated.** iLEAPP's own `notes.py` returns **zero
   rows** on the iOS-18 schema (it hard-codes the account join on `ZACCOUNT4`, which moved
   to `ZACCOUNT7` — confirmed by its own `sample_data`), so its export is unusable as a
@@ -338,6 +342,51 @@ reported, never decrypted.
   `deploy/diff_notes.py` + `dump-study-notes` / `diff-study-notes` Makefile targets added;
   `NOTICE`, `docs/schemas/notes.md`, `docs/schemas/README.md` and `README.md` updated in
   the same change.
+
+## M6 — v0.1 (complete)
+
+**Goal.** The v0.1 release: docs, examples, a schema-coverage table, and the tag.
+No new domain and no behavior change — the milestone packages what M1–M5 built into
+a coherent first release and hands the tag to the Operator.
+
+**Delivered.**
+
+- **Runnable examples per domain.** A godoc `Example` function in each domain
+  package (`example_test.go`, `package <domain>_test`) showing the shape every domain
+  shares — `backup.NewDirFS` → `Open` (eager schema validation) → `Capability()` →
+  stream with the **row-scoped (`*backup.RowError`, continue) vs stream-scoped (end)**
+  switch. `contacts` is the flagship (full error handling + capability print); the
+  other four each surface their domain-specific field (`calls` `Missed()`/`Duration`,
+  `messages` `Text`/`BodyUndecoded`, `calendar` the `Reader` handle + `AllDay`, `notes`
+  `Locked`/`Body`). They are illustrative — no `// Output:`, because they read a real
+  backup tree — so the gates **compile and vet** them (via `go vet` / `go test`) without
+  executing, the standard pattern for a library that reads external data. Rendered on
+  pkg.go.dev.
+- **README finalized for v0.1.** Status line updated to "v0.1 — first release"; a
+  user-facing **schema-coverage table** added (domain → package → database → storage
+  idiom → fingerprint → validated) with a pointer to the per-domain schema reference
+  and the `ErrUnsupportedSchema`-fails-loudly contract; an examples pointer linking the
+  five `example_test.go` files. The structural reference table stays in
+  `docs/schemas/README.md`; both agree all five fingerprints are **validated**.
+- **`CHANGELOG.md`** (Keep a Changelog format) with the `0.1.0` entry: core
+  (`FS`/`DirFS`/`FileRef`, capability report, error taxonomy, streaming iterators,
+  CGO-free) and the five domains, each naming its database, fingerprint, and the
+  from-scratch decoders (typedstream, gzip+protobuf). Marked pre-1.0 (minor releases
+  may break API until v1).
+- **M5 coverage-reporting gap fixed.** The M5 entry omitted the per-package `Coverage:`
+  line the house style adopted at M1 and M2–M4 all carry; backfilled from a fresh
+  `go test -cover` run: `notes` **84.0%**, `internal/applenotes` **85.7%** (others
+  unchanged from M4: `backup` 81.8%, `calls` 83.0%, `contacts` 80.4%, `messages` 79.6%,
+  `calendar` 83.8%, `internal/typedstream` 75.6%, `internal/introspect` 90.7%,
+  `internal/cocoa` 100%; `cmd/ibp-dump` + `internal/sqlitedb` are untested by design).
+- **No API, dependency, or behavior change.** Docs, examples, and a changelog only —
+  no non-test Go changed, `go.mod`/`go.sum` unchanged. Containerized gates (gofmt clean
+  / `go vet` / golangci-lint **0 issues** / `go test -race` across all packages) green
+  on the project dev CT; the five new `example_test.go` files build and vet clean.
+- **Tag is Operator-gated (charter: never tag unasked).** The version string is
+  `v0.1.0` (per the charter's "M6 — v0.1"); the annotated tag is **not** applied here.
+  The diff is delivered to the canonical Mac checkout for the `make privacy-check` gate
+  and the Operator's commit + tag — the milestone's final step.
 
 ## Decisions log
 
@@ -658,3 +707,29 @@ restated in full.
   `notes` uses stdlib + the internal packages); `go.mod`/`go.sum` unchanged. Same
   toolchain + iLEAPP oracle pins as M1–M4 (`notes.py` ships in the same iLEAPP v2026.1.0
   image; it credits mac_apt's Notes plugin, MIT — attributed in `NOTICE`).
+- **M6 — examples are godoc `Example` functions, not a standalone program
+  (in-milestone gap decision).** A package-level `Example` per domain
+  (`<domain>/example_test.go`, `package <domain>_test`) is idiomatic Go, renders on
+  pkg.go.dev, and is compiled + vet-checked by the existing gates — so it cannot rot
+  against the API the way a separate `examples/` main could. It also honors the
+  charter's "no CLI product": `cmd/ibp-dump` stays the only `main` package (a debug
+  tool, not the deliverable). The examples are illustrative (no `// Output:`) because
+  they open a real `<Domain>/<relativePath>` backup tree — the standard library uses
+  the same non-executing form for examples that need external resources.
+- **M6 — schema-coverage table lives in the README (user-facing); the structural
+  reference stays in `docs/schemas/README.md`.** The README table is the front-door
+  support matrix (domain → package → database → idiom → fingerprint → validated); the
+  schemas doc remains the tables/joins/epochs reference. Both assert all five
+  fingerprints **validated** — no new status, no re-validation (M6 changes no parser).
+- **M6 — M5 coverage line backfilled (house-style regression, Operator-flagged).** The
+  M1 "coverage declaration adopted" house style requires a per-package `Coverage:` line
+  per milestone entry; M5's entry lacked it. Backfilled from a fresh `go test -cover`
+  (`notes` 84.0%, `internal/applenotes` 85.7%; the rest unchanged). No code change —
+  a documentation correction to a completed milestone.
+- **M6 — tag is Operator-gated; version `v0.1.0`.** The charter forbids tagging or
+  pushing unasked, so M6 prepares the release (CHANGELOG, docs, examples) and the
+  Operator applies the annotated `v0.1.0` tag after the privacy gate + commit. The
+  version string follows the charter's "M6 — v0.1"; SemVer pre-1.0 semantics
+  (minor releases may break API until v1.0.0) are stated in the README and CHANGELOG.
+- **M6 — pins.** No new Go module dependencies (examples, docs, and a changelog only;
+  no non-test Go changed); `go.mod`/`go.sum` unchanged. Same toolchain pins as M1–M5.
