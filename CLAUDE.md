@@ -1,5 +1,10 @@
 # ios-backup-parser — project charter
 
+> **Human contributors:** this is the internal charter followed by the AI coding agents
+> that build this project — you do not need it. Your guide is
+> [CONTRIBUTING.md](CONTRIBUTING.md). This file is kept in the open as honest provenance
+> of how the code was written.
+
 > Agent entry point. Read this whole file before touching anything. This is a fresh
 > repo: the charter is canon-so-far, the milestone you're on defines your boundary,
 > and gaps are expected — handle them per "Process" below.

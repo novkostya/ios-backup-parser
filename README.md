@@ -3,8 +3,17 @@
 Typed Go readers for the personal data inside an iOS/iPadOS backup — **messages,
 contacts, call history, calendar, notes**.
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/novkostya/ios-backup-parser.svg)](https://pkg.go.dev/github.com/novkostya/ios-backup-parser)
+[![CI](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml/badge.svg)](https://github.com/novkostya/ios-backup-parser/actions/workflows/gates.yml)
+[![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8.svg)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > **Status: v0.1 — first release.** All five domains are validated against a real
 > decrypted backup. Pre-1.0, so the API may still change before v1.
+
+> ⚠️ **Intended use.** This library exposes a person's entire private life. Use it only
+> on **your own** backups, or data you are **explicitly authorized** to access. See
+> [Intended use](#intended-use) below — this is a boundary, not boilerplate.
 
 ## What it is
 
@@ -46,6 +55,15 @@ The per-domain schema reference — tables, joins, every timestamp column's epoc
 unit, and the evidence behind each fingerprint — is in [`docs/schemas/`](docs/schemas).
 A backup whose schema does not match a known fingerprint fails loudly at `Open`
 (`ErrUnsupportedSchema`, carrying the observed fingerprint), never silently.
+
+## Install
+
+```sh
+go get github.com/novkostya/ios-backup-parser@latest
+```
+
+Requires Go 1.25+. Pure Go, CGO-free (`modernc.org/sqlite`) — cross-compiles to a static
+binary like any other Go dependency.
 
 ## Use
 
@@ -93,6 +111,63 @@ live WAL can never be replayed into your only copy of a backup.
   other tool that yields readable domain files.
 - It does **not** parse photos libraries (use dedicated tools for that).
 
+## Intended use
+
+This library reads messages, contacts, call history, calendar, and notes — effectively
+someone's whole private life. It exists for people who want to **own and inspect their
+own data**: personal backup browsers, archival tools, migration helpers, and lawful
+digital-forensics work.
+
+Use it **only** on backups of devices you own, or data you are **explicitly and lawfully
+authorized** to access. Accessing another person's data without consent is very likely
+illegal where you live and is not a use this project supports. You are responsible for
+using it lawfully.
+
+The library is built to respect the data: it never mutates the input, makes no network
+connections, and persists nothing (see [SECURITY.md](SECURITY.md)).
+
+## Contributing
+
+Contributions are welcome — new domains especially (there's a backlog: Safari,
+Reminders, voicemail, WhatsApp). Please read [CONTRIBUTING.md](CONTRIBUTING.md); it
+covers the containerized build (`make gates`, no local Go needed), the correctness rules
+that keep the library trustworthy, and the license-hygiene boundary. By participating
+you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Found a backup that fails at `Open` with `ErrUnsupportedSchema`? That's a schema this
+release hasn't seen yet — please [open an issue](https://github.com/novkostya/ios-backup-parser/issues/new?template=unsupported-schema.md)
+with the observed fingerprint (it's structural, no personal data).
+
+## Security
+
+Security properties and private vulnerability reporting are in
+[SECURITY.md](SECURITY.md). Please report suspected issues privately, with a synthetic
+reproducer — never real backup data.
+
+## Acknowledgments
+
+This library was written from public documentation and validated against independent,
+appropriately-licensed tools. Full attribution — including which format facts came from
+where, and the strict black-box boundary around GPL tools — is in
+[`NOTICE`](NOTICE). In particular:
+
+- **[iLEAPP](https://github.com/abrignoni/iLEAPP)** (MIT) — the primary differential
+  oracle for validation, and a cross-reference for schema interpretation across every
+  domain.
+- The published **typedstream** reverse-engineering write-ups and the
+  **[python-typedstream](https://github.com/dgelessus/python-typedstream)** format
+  documentation, which informed the from-scratch `attributedBody` decoder (facts only —
+  no code ported).
+- **Apple Notes** protobuf format documentation, for the from-scratch note-body decoder.
+- **[modernc.org/sqlite](https://gitlab.com/cznic/sqlite)** — the CGO-free SQLite driver
+  that keeps this library pure Go.
+
+Not affiliated with or endorsed by Apple.
+
 ## License
+
+Released under the [MIT License](LICENSE) — Copyright (c) 2026 Konstantin Novikov.
+Third-party attributions are in [`NOTICE`](NOTICE). Changes per release are in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 MIT. Not affiliated with or endorsed by Apple.
