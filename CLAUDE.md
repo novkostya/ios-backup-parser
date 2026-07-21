@@ -255,6 +255,15 @@ its own milestone/CHANGELOG/fingerprint.
 - **reminders** — its own store since ~iOS 13 (the M0 calendar doc recorded
   `CalendarItem`'s reminder columns as present-but-unused for exactly this
   reason); location + idiom (expect CoreData) established by its spike.
+- **voice memos** — **BACKLOG, not scheduled (added 2026-07-22 from an iMazing parity
+  re-check — a genuine gap the first review missed).** User-created recordings: a
+  metadata store (title / date / duration / folder — modern iOS uses a CoreData
+  `CloudRecordings.db` under the Voice Memos app-group; verify at the spike) plus the
+  audio files as `FileRef`s. Arguably the **strongest remaining candidate**: unlike
+  voicemail the data is user-created so it's actually present, and unlike whatsapp it
+  is not app-encrypted — it fits the decrypted-input boundary cleanly and is far
+  smaller than photos. Not scheduled (the scope settled at 7 domains); recorded so the
+  parity review is honest.
 - **voicemail** — **DE-PRIORITIZED (Operator, 2026-07-20):** the Operator's device
   holds no voicemails to introspect or differential-validate against, so it could
   only ever reach `observed`/`fixture-only` here, never `validated`. Not scheduled;
