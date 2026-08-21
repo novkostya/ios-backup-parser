@@ -276,19 +276,29 @@ its own milestone/CHANGELOG/fingerprint.
   project), not a parsing one. (iMazing can't do it either; adversarial schema churn
   on top.) Removed from the planned backlog; only becomes viable if someone first
   solves WhatsApp decryption upstream.
-- **photos** — **BACKLOG, not scheduled (Operator ruling 2026-07-20: reconsidered,
-  left as-is).** It IS the one remaining domain that fits the boundary (`Photos.sqlite`
-  is a normal decryptable iOS DB, not app-encrypted) and has real data to validate —
-  so it's feasible, but not being built now. Two reasons it stays parked: **quince
-  won't consume it** (icloudpd + Immich cover the Operator's photos), so it's pure
-  standalone-library ambition; and it's the **largest, most schema-churned** iOS DB
-  (huge CoreData `ZASSET` model). **If it is ever built, the scope is METADATA ONLY** —
-  parse `Photos.sqlite` into typed records (asset filename, capture date, geolocation,
-  album membership, favorite/hidden) with a `FileRef` to the media file, exactly like
-  message attachments; **no thumbnails, no rendering** (the README "no photos
-  libraries" line means no *rendering* — media-as-`FileRef` is the library's model
-  everywhere). That distinction is recorded so a future decision starts from the right
-  scope, but the ruling for now is: leave it.
+- **photos** — **BACKLOG, not scheduled — but ONE OF ITS TWO PARKING REASONS IS WITHDRAWN
+  (Operator, 2026-08-21).** It IS the one remaining domain that fits the boundary
+  (`Photos.sqlite` is a normal decryptable iOS DB, not app-encrypted) and has real data to
+  validate — so it's feasible.
+
+  **The reason that no longer holds: "quince won't consume it".** The 2026-07-20 ruling parked
+  photos partly as *"pure standalone-library ambition"*, on the premise that icloudpd + Immich
+  cover the Operator's photos. That premise is withdrawn — quince intends a photos view, and
+  this library is where its schema knowledge belongs, the same as every other domain. Recorded
+  because a reader who found only the old sentence would classify photos as out-of-product and
+  weigh it against the wrong thing.
+
+  **The reason that still holds:** it is the **largest, most schema-churned** iOS DB (huge
+  CoreData `ZASSET` model), which is a real cost and is why this is still *not scheduled*.
+  Nothing here schedules it.
+
+  **The METADATA-ONLY scope is UNCHANGED and is not in tension with a photos UI.** Parse
+  `Photos.sqlite` into typed records (asset filename, capture date, geolocation, album
+  membership, favorite/hidden) with a `FileRef` to the media file, exactly like message
+  attachments; **no thumbnails, no rendering**. A consumer that shows a photo grid renders from
+  the `FileRef` — the media file is in the backup and the consumer already has it. So "quince
+  wants a Photos-like view" does not reopen the no-rendering rule; it is the rule working as
+  intended, with the rendering on the side that has a screen.
 
 ## Where work runs (read this BEFORE your first command)
 
