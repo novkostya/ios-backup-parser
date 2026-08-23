@@ -381,6 +381,18 @@ func (m *Messages) fillParticipants(chat *Chat, handles map[int64]Handle) (error
 // page must NOT preload 236,372 rows to answer it; at page scale the per-message query this
 // replaces costs ~50 lookups and is the right shape. The lever is a property of scanning
 // everything, not of reading chat memberships.
+//
+// ITS ERROR IS DELIBERATELY NOT A *backup.RowError, AND WRAPPING IT AS ONE WOULD BE A SILENT
+// REGRESSION. Consumers classify: a RowError withholds one record and the stream continues, and
+// quince counts those and reports "N message(s) could not be read". **A prefetch failure is not
+// attributable to one message** — every message would lose its memberships while a reassuring
+// count said one, so group chats would collapse to nothing and threads would lose their
+// membership rows with nothing saying why. A wrong-but-plausible result is worse than a loud
+// stop, which is why this fails the whole scan instead.
+//
+// The better answer is probably a third one — skip the bad join row, count it, report it, which
+// is the pattern quince's own consumer implements — and it needs a warning channel this package
+// does not have. That is an API question, not a line here.
 func (m *Messages) loadChatIDs() (map[int64][]int64, error) {
 	rows, err := m.db.Query(
 		"SELECT message_id, chat_id FROM chat_message_join ORDER BY message_id, chat_id")
