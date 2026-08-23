@@ -34,3 +34,14 @@ func FromSecondsFloat(s float64) time.Time {
 func FromNanoseconds(n int64) time.Time {
 	return time.Unix(unixDelta, n).UTC()
 }
+
+// ToNanoseconds is FromNanoseconds' inverse: a Go time back to Cocoa nanoseconds, the form
+// `message.date` and `chat_message_join.message_date` are stored in.
+//
+// IT EXISTS SO A CALLER NEVER HAS TO KNOW THE EPOCH. Paging compares against the stored column,
+// and a cursor built from a `time.Time` with `UnixNano()` is off by 31 years — the comparison
+// then matches nothing and the page walk silently never advances. Converting here keeps that
+// arithmetic in one place instead of at every call site.
+func ToNanoseconds(t time.Time) int64 {
+	return t.Unix()*1e9 - unixDelta*1e9 + int64(t.Nanosecond())
+}

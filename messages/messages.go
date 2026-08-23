@@ -24,6 +24,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"time"
 
 	backup "github.com/novkostya/ios-backup-parser"
 	"github.com/novkostya/ios-backup-parser/internal/cocoa"
@@ -122,32 +123,7 @@ func (m *Messages) Messages() iter.Seq2[Message, error] {
 		}
 
 		row := &messageRow{}
-		sel := []string{"ROWID", "guid", "text", "date", "is_from_me", "handle_id"}
-		dest := []any{&row.id, &row.guid, &row.text, &row.date, &row.isFromMe, &row.handleID}
-		col := func(unit, expr string, target any) {
-			if !m.unavailable[unit] {
-				sel = append(sel, expr)
-				dest = append(dest, target)
-			}
-		}
-		col("attributed_text", "attributedBody", &row.attributedBody)
-		col("service", "service", &row.service)
-		col("delivery", "date_read", &row.dateRead)
-		col("delivery", "date_delivered", &row.dateDelivered)
-		col("tapbacks", "associated_message_type", &row.associatedType)
-		col("tapbacks", "associated_message_guid", &row.associatedGUID)
-		col("tapback_emoji", "associated_message_emoji", &row.associatedEmoji)
-		col("edits", "date_edited", &row.dateEdited)
-		col("edits", "date_retracted", &row.dateRetracted)
-		col("threads", "thread_originator_guid", &row.threadGUID)
-		col("threads", "reply_to_guid", &row.replyToGUID)
-		col("app_messages", "balloon_bundle_id", &row.balloonBundleID)
-		// payload_data is a BLOB; select only its presence, never its bytes.
-		col("app_messages", "(payload_data IS NOT NULL)", &row.hasPayload)
-		col("group_events", "item_type", &row.itemType)
-		col("group_events", "group_title", &row.groupTitle)
-		col("group_events", "group_action_type", &row.groupActionType)
-		col("attachments", "cache_has_attachments", &row.cacheHasAttachments)
+		sel, dest := m.messageColumns(row, "")
 
 		rows, err := m.db.Query("SELECT " + strings.Join(sel, ", ") + " FROM message ORDER BY date, ROWID")
 		if err != nil {
@@ -189,6 +165,177 @@ func (m *Messages) Messages() iter.Seq2[Message, error] {
 	}
 }
 
+// ChatCursor is a position in one conversation's newest-first order: the message strictly
+// before it is the next one returned. The zero value starts at the newest.
+//
+// (At, ID) RATHER THAN ID ALONE, because ROWID order is insertion order and messages arrive out
+// of date order — a synced conversation interleaves. The pair is what makes the ordering total,
+// so a page boundary cannot repeat or drop a message that shares a timestamp.
+//
+// `At` IS A time.Time, NOT THE STORED INTEGER, and that is deliberate. The column holds COCOA
+// nanoseconds (epoch 2001); a caller holding `Message.Time` and reaching for `UnixNano()` is off
+// by 31 years, the comparison then matches nothing, and the page walk silently never advances
+// rather than failing. Taking a `time.Time` and converting inside is what makes that mistake
+// unavailable — it was made here first, and the test that caught it is
+// TestChatMessagesPagingMatchesOneShot.
+type ChatCursor struct {
+	At time.Time
+	ID int64 // message ROWID
+}
+
+// ChatMessages streams ONE conversation, newest first, from `before` and no further than
+// `limit` messages.
+//
+// WHY THIS EXISTS: reading a thread does not need the whole database. `Messages()` scans every
+// row so a consumer can build an index; this answers the question a reader actually asks, and
+// on a real 254,949-message backup a 50-row page costs about a millisecond against Apple's own
+// covering index — `chat_message_join(message_date, message_id, chat_id)`, which SQLite uses as
+// a covering search for `chat_id = ?` (quince#1531).
+//
+// IT ORDERS AND CURSORS ON `message.date`, NOT ON THE JOIN'S DENORMALIZED `message_date`, AND
+// THAT COSTS SOMETHING ON PURPOSE. Apple ships a covering index —
+// `chat_message_join(message_date, message_id, chat_id)` — which SQLite uses for `chat_id = ?`
+// and which makes the paged query effectively free. Ordering on `message.date` instead needs a
+// sort. Measured on a real 254,949-message backup, newest 50 of a 98,598-message conversation:
+//
+//	ORDER BY j.message_date (indexed)   ~0 ms
+//	ORDER BY m.date         (a sort)   120 ms
+//
+// **The 120 ms is paid deliberately, because the fast column can be WRONG.** The two agree on
+// real data — measured, 0 mismatches and 0 NULLs across 236,372 join rows — but they are two
+// copies of one fact, and this package's own fixture carries join rows whose `message_date` is
+// 0 while the message's date is real. A reader ordering on the stale copy returns a
+// conversation in an order that is not its own, and a cursor built on it never advances: the
+// page walk silently repeats its first page forever. That is worse than 120 ms, and it is not
+// hypothetical — it is what the first version of this did, and
+// TestChatMessagesPagingMatchesOneShot is what caught it.
+//
+// 120 ms is a page load replacing an ~11 s scan. If it ever matters, the fix is an index on the
+// session's own copy, not trusting the denormalized column.
+// NO PREFETCH HERE, DELIBERATELY. `loadChatIDs` exists for the full scan and would preload
+// 236,372 rows to answer 50 — the per-message lookup is the right shape at page scale and costs
+// ~50 indexed queries. The lever is a property of scanning everything.
+func (m *Messages) ChatMessages(chatID int64, before ChatCursor, limit int) iter.Seq2[Message, error] {
+	return func(yield func(Message, error) bool) {
+		if m.unavailable["chats"] {
+			yield(Message{}, fmt.Errorf("messages: chats: %w", backup.ErrUnavailable))
+			return
+		}
+		var handles map[int64]Handle
+		if !m.unavailable["handles"] {
+			var err error
+			if handles, err = m.loadHandles(); err != nil {
+				yield(Message{}, fmt.Errorf("messages: %w", err))
+				return
+			}
+		}
+
+		row := &messageRow{}
+		sel, dest := m.messageColumns(row, "m")
+
+		q := "SELECT " + strings.Join(sel, ", ") +
+			" FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id" +
+			" WHERE j.chat_id = ?"
+		args := []any{chatID}
+		if !before.At.IsZero() || before.ID != 0 {
+			// STRICTLY BEFORE, on the pair. `<` on the tuple, spelled out because SQLite's
+			// row-value form is not universally available in the versions this targets.
+			q += " AND (m.date < ? OR (m.date = ? AND m.ROWID < ?))"
+			at := cocoa.ToNanoseconds(before.At)
+			args = append(args, at, at, before.ID)
+		}
+		q += " ORDER BY m.date DESC, m.ROWID DESC"
+		if limit > 0 {
+			q += " LIMIT ?"
+			args = append(args, limit)
+		}
+
+		rows, err := m.db.Query(q, args...)
+		if err != nil {
+			yield(Message{}, fmt.Errorf("messages: query chat messages: %w", err))
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			*row = messageRow{}
+			if err := rows.Scan(dest...); err != nil {
+				if !yield(Message{}, &backup.RowError{
+					Domain: "messages", Table: "message", RowID: row.id.Int64, Err: err,
+				}) {
+					return
+				}
+				continue
+			}
+			msg := row.message()
+			// nil chatIDs: enrich falls back to the per-message query, which is what page
+			// scale wants.
+			if err, rowScoped := m.enrich(&msg, row, handles, nil); err != nil {
+				if !rowScoped {
+					yield(Message{}, fmt.Errorf("messages: %w", err))
+					return
+				}
+				if !yield(Message{}, &backup.RowError{
+					Domain: "messages", Table: "message", RowID: msg.ID, Err: err,
+				}) {
+					return
+				}
+				continue
+			}
+			if !yield(msg, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(Message{}, fmt.Errorf("messages: read chat messages: %w", err))
+		}
+	}
+}
+
+// messageColumns builds the SELECT list and scan targets for a message row.
+//
+// SHARED BY BOTH READ PATHS — the full scan and the per-chat page — so a column that becomes
+// available or gated cannot appear on one and not the other. Two hand-kept lists is the drift
+// this exists to prevent.
+//
+// The caller supplies the row so the scan targets point into storage it owns and can reset
+// between rows.
+func (m *Messages) messageColumns(row *messageRow, qualify string) (sel []string, dest []any) {
+	q := func(c string) string {
+		if qualify == "" {
+			return c
+		}
+		return qualify + "." + c
+	}
+	sel = []string{q("ROWID"), q("guid"), q("text"), q("date"), q("is_from_me"), q("handle_id")}
+	dest = []any{&row.id, &row.guid, &row.text, &row.date, &row.isFromMe, &row.handleID}
+	col := func(unit, expr string, target any) {
+		if !m.unavailable[unit] {
+			sel = append(sel, expr)
+			dest = append(dest, target)
+		}
+	}
+	col("attributed_text", q("attributedBody"), &row.attributedBody)
+	col("service", q("service"), &row.service)
+	col("delivery", q("date_read"), &row.dateRead)
+	col("delivery", q("date_delivered"), &row.dateDelivered)
+	col("tapbacks", q("associated_message_type"), &row.associatedType)
+	col("tapbacks", q("associated_message_guid"), &row.associatedGUID)
+	col("tapback_emoji", q("associated_message_emoji"), &row.associatedEmoji)
+	col("edits", q("date_edited"), &row.dateEdited)
+	col("edits", q("date_retracted"), &row.dateRetracted)
+	col("threads", q("thread_originator_guid"), &row.threadGUID)
+	col("threads", q("reply_to_guid"), &row.replyToGUID)
+	col("app_messages", q("balloon_bundle_id"), &row.balloonBundleID)
+	// payload_data is a BLOB; select only its presence, never its bytes.
+	col("app_messages", "("+q("payload_data")+" IS NOT NULL)", &row.hasPayload)
+	col("group_events", q("item_type"), &row.itemType)
+	col("group_events", q("group_title"), &row.groupTitle)
+	col("group_events", q("group_action_type"), &row.groupActionType)
+	col("attachments", q("cache_has_attachments"), &row.cacheHasAttachments)
+	return sel, dest
+}
+
 // enrich resolves the per-message sender, chat memberships and attachments. The
 // bool result classifies a non-nil error: true = row-scoped (this message
 // only), false = stream-scoped.
@@ -204,14 +351,21 @@ func (m *Messages) enrich(msg *Message, row *messageRow, handles map[int64]Handl
 		msg.Handle = &h
 	}
 	if !m.unavailable["chats"] {
-		// FROM THE PREFETCHED MAP, not a query per message — see loadChatIDs. A message with no
-		// join rows gets a nil slice, which is what the per-message query returned for it too.
+		// TWO SHAPES, ONE RULE: prefetched map for the full scan, per-message query for a page.
 		//
-		// THE SLICE IS COPIED rather than aliased: the map outlives this call and is shared by
-		// every message in the scan, so handing out the backing array would let a consumer's
-		// append write into the next message's memberships.
-		if ids := chatIDs[msg.ID]; len(ids) > 0 {
-			msg.ChatIDs = append(msg.ChatIDs, ids...)
+		// `chatIDs == nil` MEANS "ask per message", not "no memberships" — the scan always
+		// passes a non-nil map (possibly empty) when chats are available, and ChatMessages
+		// always passes nil. Preloading 236,372 rows to answer a 50-row page would be the
+		// wrong trade in the other direction (quince#1531).
+		if chatIDs != nil {
+			// THE SLICE IS COPIED rather than aliased: the map outlives this call and is
+			// shared by every message in the scan, so handing out the backing array would let
+			// a consumer's append write into the next message's memberships.
+			if ids := chatIDs[msg.ID]; len(ids) > 0 {
+				msg.ChatIDs = append(msg.ChatIDs, ids...)
+			}
+		} else if err, rowScoped := m.fillChatIDs(msg); err != nil {
+			return err, rowScoped
 		}
 	}
 	if !m.unavailable["attachments"] && row.cacheHasAttachments.Int64 != 0 {
@@ -359,6 +513,34 @@ func (m *Messages) fillParticipants(chat *Chat, handles map[int64]Handle) (error
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read participants: %w", err), false
+	}
+	return nil, false
+}
+
+// fillChatIDs loads ONE message's chat memberships (chat_message_join is many-to-many).
+//
+// THE PAGE PATH'S SHAPE, and it is not dead code the prefetch replaced: ChatMessages serves ~50
+// rows and calls this ~50 times, which is cheaper than preloading the whole join table. The full
+// scan uses loadChatIDs instead, because there the per-message form was 73.5% of the work
+// (quince#1512).
+func (m *Messages) fillChatIDs(msg *Message) (error, bool) {
+	rows, err := m.db.Query(
+		"SELECT chat_id FROM chat_message_join WHERE message_id = ? ORDER BY chat_id", msg.ID)
+	if err != nil {
+		return fmt.Errorf("query chat ids: %w", err), false
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var chatID sql.NullInt64
+		if err := rows.Scan(&chatID); err != nil {
+			return fmt.Errorf("chat id: %w", err), true
+		}
+		if chatID.Valid {
+			msg.ChatIDs = append(msg.ChatIDs, chatID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read chat ids: %w", err), false
 	}
 	return nil, false
 }
