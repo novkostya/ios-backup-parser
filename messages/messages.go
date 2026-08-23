@@ -109,6 +109,17 @@ func (m *Messages) Messages() iter.Seq2[Message, error] {
 				return
 			}
 		}
+		// ONE PASS OVER chat_message_join INSTEAD OF ONE QUERY PER MESSAGE — quince#1512
+		// measured the per-message form at 73.5% of this scan. Loaded here rather than in
+		// enrich so the cost is paid once for the iterator, exactly as handles are.
+		var chatIDs map[int64][]int64
+		if !m.unavailable["chats"] {
+			var err error
+			if chatIDs, err = m.loadChatIDs(); err != nil {
+				yield(Message{}, fmt.Errorf("messages: %w", err))
+				return
+			}
+		}
 
 		row := &messageRow{}
 		sel := []string{"ROWID", "guid", "text", "date", "is_from_me", "handle_id"}
@@ -156,7 +167,7 @@ func (m *Messages) Messages() iter.Seq2[Message, error] {
 				continue
 			}
 			msg := row.message()
-			if err, rowScoped := m.enrich(&msg, row, handles); err != nil {
+			if err, rowScoped := m.enrich(&msg, row, handles, chatIDs); err != nil {
 				if !rowScoped {
 					yield(Message{}, fmt.Errorf("messages: %w", err))
 					return
@@ -181,7 +192,7 @@ func (m *Messages) Messages() iter.Seq2[Message, error] {
 // enrich resolves the per-message sender, chat memberships and attachments. The
 // bool result classifies a non-nil error: true = row-scoped (this message
 // only), false = stream-scoped.
-func (m *Messages) enrich(msg *Message, row *messageRow, handles map[int64]Handle) (error, bool) {
+func (m *Messages) enrich(msg *Message, row *messageRow, handles map[int64]Handle, chatIDs map[int64][]int64) (error, bool) {
 	// Sender handle: a non-zero handle_id that resolves to no handle row is a
 	// dangling reference — withhold the message (row-scoped) rather than emit it
 	// with a silently-missing sender.
@@ -193,38 +204,20 @@ func (m *Messages) enrich(msg *Message, row *messageRow, handles map[int64]Handl
 		msg.Handle = &h
 	}
 	if !m.unavailable["chats"] {
-		if err, rowScoped := m.fillChatIDs(msg); err != nil {
-			return err, rowScoped
+		// FROM THE PREFETCHED MAP, not a query per message — see loadChatIDs. A message with no
+		// join rows gets a nil slice, which is what the per-message query returned for it too.
+		//
+		// THE SLICE IS COPIED rather than aliased: the map outlives this call and is shared by
+		// every message in the scan, so handing out the backing array would let a consumer's
+		// append write into the next message's memberships.
+		if ids := chatIDs[msg.ID]; len(ids) > 0 {
+			msg.ChatIDs = append(msg.ChatIDs, ids...)
 		}
 	}
 	if !m.unavailable["attachments"] && row.cacheHasAttachments.Int64 != 0 {
 		if err, rowScoped := m.fillAttachments(msg); err != nil {
 			return err, rowScoped
 		}
-	}
-	return nil, false
-}
-
-// fillChatIDs loads the chat memberships of a message (chat_message_join is
-// many-to-many).
-func (m *Messages) fillChatIDs(msg *Message) (error, bool) {
-	rows, err := m.db.Query(
-		"SELECT chat_id FROM chat_message_join WHERE message_id = ? ORDER BY chat_id", msg.ID)
-	if err != nil {
-		return fmt.Errorf("query chat ids: %w", err), false
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var chatID sql.NullInt64
-		if err := rows.Scan(&chatID); err != nil {
-			return fmt.Errorf("chat id: %w", err), true
-		}
-		if chatID.Valid {
-			msg.ChatIDs = append(msg.ChatIDs, chatID.Int64)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read chat ids: %w", err), false
 	}
 	return nil, false
 }
@@ -368,6 +361,49 @@ func (m *Messages) fillParticipants(chat *Chat, handles map[int64]Handle) (error
 		return fmt.Errorf("read participants: %w", err), false
 	}
 	return nil, false
+}
+
+// loadChatIDs preloads every message's chat memberships in ONE pass.
+//
+// WHY THIS EXISTS: it was 73.5% of the scan. `fillChatIDs` ran one indexed query per message —
+// 254,949 of them on a real backup, 24.3 µs each, 6.192 s of an 8.422 s scan (quince#1512,
+// measured by instrumenting this function). Replacing that with a single pass over the join
+// table is the same lever `loadHandles` already applies to `handle`, one table over.
+//
+// IT IS NOT BOUNDED THE WAY `loadHandles` IS, AND THE COMMENT ABOVE IT SHOULD NOT BE COPIED.
+// `handle` holds one row per distinct correspondent — bounded by who you talk to. This is
+// bounded by how MUCH you talk: one row per (message, chat), 236,372 on the same backup, so the
+// map is O(messages) rather than O(correspondents). At that size it is a few tens of MB against
+// a decrypted manifest already in scratch that is an order larger, which is why it is worth it —
+// but the reason is a size comparison, not a boundedness claim.
+//
+// ONLY THE FULL SCAN SHOULD CALL THIS. A future per-chat cursored accessor serving one 50-row
+// page must NOT preload 236,372 rows to answer it; at page scale the per-message query this
+// replaces costs ~50 lookups and is the right shape. The lever is a property of scanning
+// everything, not of reading chat memberships.
+func (m *Messages) loadChatIDs() (map[int64][]int64, error) {
+	rows, err := m.db.Query(
+		"SELECT message_id, chat_id FROM chat_message_join ORDER BY message_id, chat_id")
+	if err != nil {
+		return nil, fmt.Errorf("load chat ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[int64][]int64{}
+	for rows.Next() {
+		var messageID, chatID sql.NullInt64
+		if err := rows.Scan(&messageID, &chatID); err != nil {
+			return nil, fmt.Errorf("load chat ids: %w", err)
+		}
+		// A NULL on either side is a join row that points nowhere; the per-message query this
+		// replaces skipped a NULL chat_id the same way, so the emitted set is unchanged.
+		if messageID.Valid && chatID.Valid {
+			out[messageID.Int64] = append(out[messageID.Int64], chatID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load chat ids: %w", err)
+	}
+	return out, nil
 }
 
 // loadHandles preloads the `handle` reference table (bounded: one row per
