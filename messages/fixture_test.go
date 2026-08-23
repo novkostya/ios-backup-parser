@@ -235,6 +235,12 @@ func BuildFixture(t *testing.T, path string, opt FixtureOptions) {
 		"balloon_bundle_id": "com.apple.messages.URLBalloonProvider",
 		"payload_data":      []byte("fixture-payload")})
 	link(1, 10)
+	// MANY-TO-MANY, AND IT IS THE ONLY MESSAGE THAT EXERCISES IT. `chat_message_join` is a
+	// many-to-many table and every other fixture message sits in exactly one chat, so before
+	// this line a reader that returned only the FIRST membership passed the whole suite.
+	// Ordering matters too: memberships come back ascending by chat_id, which the prefetch
+	// preserves through `ORDER BY message_id, chat_id`.
+	link(2, 10)
 }
 
 var (
@@ -277,7 +283,7 @@ func ExpectedMessages() []*Message {
 		nil, // ROWID 8: *backup.RowError — dangling handle reference
 		{ID: 9, GUID: "fx-msg-0009", ChatIDs: []int64{1}, Time: cocoa.FromNanoseconds(fixtureDate(9)),
 			Text: "", BodyUndecoded: true, Service: "iMessage", Handle: &h1},
-		{ID: 10, GUID: "fx-msg-0010", ChatIDs: []int64{1}, Time: cocoa.FromNanoseconds(fixtureDate(10)),
+		{ID: 10, GUID: "fx-msg-0010", ChatIDs: []int64{1, 2}, Time: cocoa.FromNanoseconds(fixtureDate(10)),
 			Text: "", Service: "iMessage", IsFromMe: true,
 			BalloonBundleID: "com.apple.messages.URLBalloonProvider", HasPayload: true},
 	}
